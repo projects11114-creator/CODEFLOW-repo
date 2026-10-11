@@ -1,0 +1,28 @@
+@import "tailwindcss";
+
+/* Monaco Editor active execution line highlight */
+.active-execution-line-bg {
+  background: rgba(6, 182, 212, 0.16) !important;
+  border-left: 3px solid #06b6d4 !important;
+  box-shadow: inset 0 0 12px rgba(6, 182, 212, 0.12);
+  pointer-events: none !important;
+}
+
+/* Custom dark scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090d16;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #1e293b;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}

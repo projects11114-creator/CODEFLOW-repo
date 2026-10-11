@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CodeFlow (Fast Learning on Windows)</title>
+    <meta name="description" content="An interactive coding and learning platform that helps students understand how code executes, identify errors, and learn programming through live visualizations." />
+    <meta property="og:title" content="CodeFlow (Fast Learning on Windows)" />
+    <meta property="og:description" content="An interactive coding and learning platform that helps students understand how code executes, identify errors, and learn programming through live visualizations." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:ital,wght@0,300..800;1,300..800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <script>
+      (function() {
+        function isResizeObserverNotice(err) {
+          if (!err) return false;
+          var msg = typeof err === 'string' ? err : (err.message || (err.error && err.error.message) || '');
+          return typeof msg === 'string' && (
+            msg.indexOf('ResizeObserver loop completed with undelivered notifications') !== -1 ||
+            msg.indexOf('ResizeObserver loop limit exceeded') !== -1
+          );
+        }
+        window.addEventListener('error', function(e) {
+          if (isResizeObserverNotice(e)) {
+            e.stopImmediatePropagation();
+            e.preventDefault();
+            return true;
+          }
+        }, true);
+        var origOnError = window.onerror;
+        window.onerror = function(msg, url, lineNo, columnNo, error) {
+          if (isResizeObserverNotice(msg) || (error && isResizeObserverNotice(error))) {
+            return true;
+          }
+          if (origOnError) return origOnError.apply(this, arguments);
+        };
+      })();
+    </script>
+  </head>
+  <body class="bg-slate-950 text-slate-100 antialiased overflow-hidden selection:bg-indigo-500/30 selection:text-indigo-200">
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+

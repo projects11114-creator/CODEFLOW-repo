@@ -1,0 +1,6 @@
+{
+  "name": "CodeFlow (Fast Learning on Windows)",
+  "description": "An interactive coding and learning platform that helps students understand how code executes, identify errors, and learn programming through live visualizations.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
