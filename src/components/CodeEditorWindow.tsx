@@ -88,21 +88,21 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
       base: 'vs-dark',
       inherit: true,
       rules: [
-        { token: 'comment', foreground: '64748b', fontStyle: 'italic' },
+        { token: 'comment', foreground: '707070', fontStyle: 'italic' },
         { token: 'keyword', foreground: '38bdf8', fontStyle: 'bold' },
         { token: 'number', foreground: 'f59e0b' },
         { token: 'string', foreground: '34d399' },
         { token: 'type', foreground: 'c084fc' },
       ],
       colors: {
-        'editor.background': '#090d16',
-        'editor.foreground': '#e2e8f0',
-        'editorLineNumber.foreground': '#475569',
-        'editorLineNumber.activeForeground': '#38bdf8',
-        'editor.lineHighlightBackground': '#0f172a',
-        'editorCursor.foreground': '#38bdf8',
-        'editor.selectionBackground': '#0284c740',
-        'editor.inactiveSelectionBackground': '#0284c720',
+        'editor.background': '#080808',
+        'editor.foreground': '#F5F5F5',
+        'editorLineNumber.foreground': '#555555',
+        'editorLineNumber.activeForeground': '#F5F5F5',
+        'editor.lineHighlightBackground': '#141414',
+        'editorCursor.foreground': '#06b6d4',
+        'editor.selectionBackground': '#292929',
+        'editor.inactiveSelectionBackground': '#1c1c1c',
       },
     });
     monacoInstance.editor.setTheme('codeflow-dark');
@@ -220,11 +220,11 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
   };
 
   return (
-    <div className="flex flex-col h-full bg-[#090d16] border-r border-slate-800">
+    <div className="flex flex-col h-full bg-[#080808] border-r border-[#292929]">
       {/* Editor Header / Tab Bar */}
-      <div className="flex items-center justify-between px-3 py-2 bg-slate-900 border-b border-slate-800 text-xs select-none">
+      <div className="flex items-center justify-between px-3 py-2 bg-[#101010] border-b border-[#292929] text-xs select-none">
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#090d16] border-t-2 border-t-cyan-500 border-x border-b border-slate-800 text-cyan-200 font-mono text-[11px] shadow-sm">
+          <div className="flex items-center gap-1.5 px-3 py-1 rounded bg-[#151515] border-t-2 border-t-cyan-500 border-x border-b border-[#292929] text-[#F5F5F5] font-mono text-[11px] shadow-sm">
             <Code className="w-3.5 h-3.5 text-cyan-400" />
             <span>Main.java</span>
           </div>
@@ -239,7 +239,7 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
           <button
             onClick={formatCode}
             title="Auto-format code"
-            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors text-[11px]"
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#181818] hover:bg-[#242424] border border-[#292929] text-[#A0A0A0] hover:text-[#F5F5F5] transition-colors text-[11px] cursor-pointer"
           >
             <Sparkles className="w-3 h-3 text-cyan-400" />
             <span className="hidden sm:inline">Format</span>
@@ -247,16 +247,16 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
           <button
             onClick={copyCode}
             title="Copy code"
-            className="flex items-center gap-1 px-2 py-1 rounded hover:bg-slate-800 text-slate-400 hover:text-slate-200 transition-colors text-[11px]"
+            className="flex items-center gap-1 px-2.5 py-1 rounded bg-[#181818] hover:bg-[#242424] border border-[#292929] text-[#A0A0A0] hover:text-[#F5F5F5] transition-colors text-[11px] cursor-pointer"
           >
-            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3" />}
+            {copied ? <Check className="w-3 h-3 text-emerald-400" /> : <Copy className="w-3 h-3 text-[#A0A0A0]" />}
             <span className="hidden sm:inline">{copied ? 'Copied' : 'Copy'}</span>
           </button>
         </div>
       </div>
 
       {/* Monaco Code Editor Canvas - Native click, selection and cursor handling */}
-      <div className="relative flex-1 overflow-hidden">
+      <div className="relative flex-1 overflow-hidden bg-[#080808]">
         <Editor
           height="100%"
           language="java"
@@ -266,7 +266,7 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
           onMount={handleEditorDidMount}
           options={STATIC_EDITOR_OPTIONS}
           loading={
-            <div className="flex items-center justify-center h-full text-slate-400 text-xs font-mono">
+            <div className="flex items-center justify-center h-full text-[#A0A0A0] text-xs font-mono">
               Loading CodeFlow Monaco Editor...
             </div>
           }
@@ -274,7 +274,7 @@ export const CodeEditorWindow: React.FC<CodeEditorWindowProps> = React.memo(({
       </div>
 
       {/* Editor Footer / Info Bar */}
-      <div className="flex items-center justify-between px-3 py-1 bg-slate-900/90 border-t border-slate-800 text-[10px] text-slate-400 font-mono select-none">
+      <div className="flex items-center justify-between px-3 py-1 bg-[#101010] border-t border-[#292929] text-[10px] text-[#A0A0A0] font-mono select-none">
         <div className="flex items-center gap-3">
           <span>Java 17/21 Standard</span>
           <span>UTF-8</span>

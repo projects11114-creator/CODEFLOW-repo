@@ -10,11 +10,16 @@ import {
   AlertTriangle,
   Cpu,
   Maximize2,
+  Minimize2,
   Terminal,
   Activity,
   GitCompare,
   ArrowLeftRight,
   CheckCircle2,
+  Play,
+  Pause,
+  StepForward,
+  StepBack,
 } from 'lucide-react';
 import { ExecutionStep, VariableInfo, HeapObject } from '../engine/types.ts';
 
@@ -23,6 +28,15 @@ interface ThreeDMemoryVisualizerProps {
   currentStepIndex: number;
   totalSteps: number;
   onTurnOff: () => void;
+  isMaximized?: boolean;
+  onToggleMaximize?: () => void;
+  onStepForward?: () => void;
+  onStepBackward?: () => void;
+  canStepForward?: boolean;
+  canStepBackward?: boolean;
+  isPlaying?: boolean;
+  onPauseResume?: () => void;
+  onReset?: () => void;
 }
 
 type PlatformFocus = 'all' | 'memory' | 'logic' | 'output';
@@ -32,6 +46,15 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
   currentStepIndex,
   totalSteps,
   onTurnOff,
+  isMaximized: propIsMaximized,
+  onToggleMaximize,
+  onStepForward,
+  onStepBackward,
+  canStepForward,
+  canStepBackward,
+  isPlaying,
+  onPauseResume,
+  onReset,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const sceneRef = useRef<THREE.Scene | null>(null);
@@ -39,6 +62,38 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const animFrameIdRef = useRef<number | null>(null);
   const dynamicGroupRef = useRef<THREE.Group | null>(null);
+
+  // Minimize / Maximize toggle state
+  const [internalMaximized, setInternalMaximized] = useState(false);
+  const isMaximized = propIsMaximized !== undefined ? propIsMaximized : internalMaximized;
+
+  const handleToggleMaximize = () => {
+    if (onToggleMaximize) {
+      onToggleMaximize();
+    } else {
+      setInternalMaximized((prev) => !prev);
+    }
+  };
+
+  // Keyboard shortcut: Escape key restores/minimizes the 3D window
+  useEffect(() => {
+    if (!isMaximized) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleToggleMaximize();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isMaximized, onToggleMaximize]);
+
+  // Dispatch resize event when maximizing or minimizing to recalculate canvas dimensions
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      window.dispatchEvent(new Event('resize'));
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [isMaximized]);
 
   // Active view focus state
   const [platformFocus, setPlatformFocus] = useState<PlatformFocus>('all');
@@ -949,7 +1004,13 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
   }
 
   return (
-    <div className="relative w-full rounded-lg bg-[#060913] border border-cyan-900/70 overflow-hidden shadow-2xl select-none group">
+    <div
+      className={
+        isMaximized
+          ? 'fixed inset-0 z-50 w-screen h-screen bg-[#050811] overflow-hidden select-none flex flex-col shadow-2xl'
+          : 'relative w-full rounded-lg bg-[#060913] border border-cyan-900/70 overflow-hidden shadow-2xl select-none group'
+      }
+    >
       {/* 3D Scene Top HUD Overlay */}
       <div className="absolute top-2 left-2 right-2 z-10 flex items-center justify-between pointer-events-none flex-wrap gap-2">
         {/* Capability and Synchronization Indicator */}
@@ -1012,7 +1073,7 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
           </button>
         </div>
 
-        {/* 3D Orbit Camera Controls */}
+        {/* 3D Orbit Camera Controls & Top Right Minimize/Maximize */}
         <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/90 backdrop-blur-md p-1 rounded-md border border-slate-800 shadow-sm">
           <button
             onClick={handleZoomIn}
@@ -1045,6 +1106,29 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
             <Power className="w-2.5 h-2.5 text-rose-400" />
             <span>Turn OFF</span>
           </button>
+          <div className="h-3 w-px bg-slate-800" />
+          {/* Top Right Minimize / Maximize Toggle Button */}
+          <button
+            onClick={handleToggleMaximize}
+            title={isMaximized ? 'Minimize 3D Window (Esc to restore)' : 'Maximize 3D Window to Full Screen'}
+            className={`flex items-center gap-1 px-2 sm:px-2.5 py-0.5 rounded border text-[10px] font-medium transition-all cursor-pointer shadow-sm ${
+              isMaximized
+                ? 'bg-cyan-950 hover:bg-cyan-900 text-cyan-300 border-cyan-500/80 ring-1 ring-cyan-500/40 shadow-sm shadow-cyan-950/40'
+                : 'bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700/70'
+            }`}
+          >
+            {isMaximized ? (
+              <>
+                <Minimize2 className="w-3 h-3 text-cyan-400" />
+                <span>Minimize</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3 h-3 text-cyan-400" />
+                <span>Maximize</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
@@ -1074,20 +1158,70 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
       {/* Main Interactive Three.js Mount Canvas */}
       <div
         ref={mountRef}
-        className="w-full h-[320px] sm:h-[360px] md:h-[400px] cursor-grab active:cursor-grabbing touch-none select-none"
+        className={
+          isMaximized
+            ? 'w-full h-full flex-1 cursor-grab active:cursor-grabbing touch-none select-none'
+            : 'w-full h-[320px] sm:h-[360px] md:h-[400px] cursor-grab active:cursor-grabbing touch-none select-none'
+        }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
         onPointerCancel={handlePointerCancel}
       />
 
-      {/* 3D Scene Bottom Legend Overlay */}
-      <div className="absolute bottom-1.5 left-2 right-2 z-10 flex items-center justify-between text-[10px] pointer-events-none flex-wrap gap-1">
-        <div className="flex items-center gap-2 bg-slate-950/85 backdrop-blur-sm px-2 py-0.5 rounded border border-slate-800/80 text-slate-400">
+      {/* 3D Scene Bottom Legend & Controls Overlay */}
+      <div className="absolute bottom-2 left-2 right-2 z-10 flex items-center justify-between text-[10px] pointer-events-none flex-wrap gap-2">
+        <div className="pointer-events-auto flex items-center gap-2 bg-slate-950/85 backdrop-blur-sm px-2.5 py-1 rounded border border-slate-800/80 text-slate-400">
           <Compass className="w-3 h-3 text-cyan-400" />
-          <span>Left-click drag to orbit • Wheel to zoom • Clean 3D view</span>
+          <span>Left-click drag to orbit • Wheel to zoom • {isMaximized ? 'Press Esc to minimize' : 'Clean 3D view'}</span>
         </div>
-        <div className="flex items-center gap-2 bg-slate-950/85 backdrop-blur-sm px-2 py-0.5 rounded border border-slate-800/80 text-slate-400 font-mono">
+
+        {/* When maximized, provide playback controls so user can interact seamlessly */}
+        {isMaximized && onStepForward && onStepBackward && onPauseResume && (
+          <div className="pointer-events-auto flex items-center gap-1.5 bg-slate-950/95 backdrop-blur-md px-3 py-1 rounded-md border border-slate-800 shadow-lg text-xs">
+            <button
+              onClick={onStepBackward}
+              disabled={!canStepBackward}
+              title="Previous Step"
+              className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              <StepBack className="w-3.5 h-3.5" />
+            </button>
+            <button
+              onClick={onPauseResume}
+              title={isPlaying ? 'Pause' : 'Play'}
+              className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 cursor-pointer transition-colors"
+            >
+              {isPlaying ? (
+                <Pause className="w-3.5 h-3.5 text-amber-400 fill-current" />
+              ) : (
+                <Play className="w-3.5 h-3.5 text-cyan-400 fill-current" />
+              )}
+            </button>
+            <button
+              onClick={onStepForward}
+              disabled={!canStepForward}
+              title="Next Step"
+              className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-200 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer transition-colors"
+            >
+              <StepForward className="w-3.5 h-3.5" />
+            </button>
+            {onReset && (
+              <button
+                onClick={onReset}
+                title="Reset Trace"
+                className="p-1 rounded bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white cursor-pointer transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            )}
+            <span className="text-[11px] font-mono text-cyan-400 font-semibold ml-1.5">
+              Step {currentStepIndex + 1}/{totalSteps} • Line {currentStep.line}
+            </span>
+          </div>
+        )}
+
+        <div className="pointer-events-auto flex items-center gap-2 bg-slate-950/85 backdrop-blur-sm px-2.5 py-1 rounded border border-slate-800/80 text-slate-400 font-mono">
           <span className="flex items-center gap-1 text-cyan-300">
             <span className="w-2 h-2 rounded-full bg-cyan-400 inline-block" /> P1: Memory
           </span>

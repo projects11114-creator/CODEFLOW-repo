@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import confetti from 'canvas-confetti';
+import { Code2, Activity, Terminal } from 'lucide-react';
 import { Navbar } from './components/Navbar.tsx';
 import { CodeEditorWindow } from './components/CodeEditorWindow.tsx';
 import { VisualizationWindow } from './components/VisualizationWindow.tsx';
@@ -553,7 +554,7 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
+    <div className="flex flex-col h-[100dvh] w-screen overflow-hidden bg-[#050505] text-[#F5F5F5] font-sans">
       {/* Top Navigation & Toolbar */}
       <Navbar
         onRun={handleRun}
@@ -582,39 +583,45 @@ export default function App() {
         onCreateProject={() => setCurrentView('create-project')}
       />
 
-      {/* Mobile/Tablet View Switcher Bar */}
-      <div className="lg:hidden flex items-center justify-around bg-slate-900 border-b border-slate-800 text-xs py-1.5 px-2 select-none">
+      {/* Mobile/Tablet Adaptive View Switcher Bar */}
+      <div className="lg:hidden flex items-center justify-around bg-[#101010] border-b border-[#292929] text-xs py-1.5 px-2 select-none shrink-0 gap-1.5">
         <button
           onClick={() => setMobileTab('editor')}
-          className={`flex-1 py-1 rounded text-center font-medium transition-colors ${
+          className={`flex-1 min-h-[38px] py-1 px-2 rounded-md flex items-center justify-center gap-1.5 text-center font-medium transition-colors cursor-pointer ${
             mobileTab === 'editor'
-              ? 'bg-slate-800 text-cyan-400 border border-slate-700'
-              : 'text-slate-400'
+              ? 'bg-[#1c1c1c] text-cyan-400 border border-[#333333] shadow-sm'
+              : 'text-[#A0A0A0] hover:text-[#F5F5F5] hover:bg-[#151515]'
           }`}
         >
-          1. Code Editor
+          <Code2 className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">1. Code </span>
+          <span>Editor</span>
         </button>
         <button
           onClick={() => setMobileTab('visualizer')}
-          className={`flex-1 py-1 rounded text-center font-medium transition-colors ${
+          className={`flex-1 min-h-[38px] py-1 px-2 rounded-md flex items-center justify-center gap-1.5 text-center font-medium transition-colors cursor-pointer ${
             mobileTab === 'visualizer'
-              ? 'bg-slate-800 text-cyan-400 border border-slate-700'
-              : 'text-slate-400'
+              ? 'bg-[#1c1c1c] text-cyan-400 border border-[#333333] shadow-sm'
+              : 'text-[#A0A0A0] hover:text-[#F5F5F5] hover:bg-[#151515]'
           }`}
         >
-          2. Memory & Canvas
+          <Activity className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">2. Memory &amp; </span>
+          <span>Canvas</span>
         </button>
         <button
           onClick={() => setMobileTab('output')}
-          className={`flex-1 py-1 rounded text-center font-medium transition-colors ${
+          className={`flex-1 min-h-[38px] py-1 px-2 rounded-md flex items-center justify-center gap-1.5 text-center font-medium transition-colors cursor-pointer ${
             mobileTab === 'output'
-              ? 'bg-slate-800 text-cyan-400 border border-slate-700'
-              : 'text-slate-400'
+              ? 'bg-[#1c1c1c] text-cyan-400 border border-[#333333] shadow-sm'
+              : 'text-[#A0A0A0] hover:text-[#F5F5F5] hover:bg-[#151515]'
           }`}
         >
-          3. Output & AI
+          <Terminal className="w-3.5 h-3.5 shrink-0" />
+          <span className="hidden sm:inline">3. Output &amp; </span>
+          <span>AI</span>
           {diagnostics.length > 0 && (
-            <span className="ml-1 px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px]">
+            <span className="ml-0.5 px-1.5 py-0.2 rounded-full bg-rose-600 text-white text-[10px] font-bold">
               {diagnostics.length}
             </span>
           )}

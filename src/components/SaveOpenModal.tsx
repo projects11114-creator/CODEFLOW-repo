@@ -109,34 +109,37 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm select-none">
-      <div className="bg-slate-900 border border-slate-800 rounded-xl max-w-lg w-full flex flex-col shadow-2xl text-slate-200">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2.5 sm:p-4 bg-black/80 backdrop-blur-md select-none">
+      <div className="bg-[#121212] border border-[#2a2a2a] rounded-lg max-w-lg w-full flex flex-col shadow-2xl text-neutral-200 font-sans">
         {/* Modal Header */}
-        <div className="flex items-center justify-between px-5 py-3.5 border-b border-slate-800 bg-slate-900/90">
-          <div className="flex items-center gap-2">
-            {mode === 'save' ? (
-              <Save className="w-4 h-4 text-emerald-400" />
-            ) : (
-              <FolderOpen className="w-4 h-4 text-cyan-400" />
-            )}
-            <h2 className="text-sm font-bold text-white">
+        <div className="flex items-center justify-between px-3.5 sm:px-5 py-3 sm:py-3.5 border-b border-[#222222] bg-[#161616]">
+          <div className="flex items-center gap-2 sm:gap-2.5">
+            <div className="w-7 h-7 rounded-md bg-[#242424] border border-[#444444] flex items-center justify-center text-neutral-200 shrink-0">
+              {mode === 'save' ? (
+                <Save className="w-4 h-4 text-neutral-200" />
+              ) : (
+                <FolderOpen className="w-4 h-4 text-neutral-200" />
+              )}
+            </div>
+            <h2 className="text-xs sm:text-sm font-bold text-white tracking-wide">
               {mode === 'save' ? 'Save Project Locally' : 'Open Saved Project'}
             </h2>
           </div>
           <button
             onClick={onClose}
-            className="p-1.5 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+            className="p-1.5 rounded-md hover:bg-[#242424] text-neutral-400 hover:text-white transition-colors cursor-pointer shrink-0"
+            aria-label="Close modal"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Modal Content */}
-        <div className="p-5 space-y-4 text-xs">
+        <div className="p-3.5 sm:p-5 space-y-4 text-xs bg-[#121212]">
           {mode === 'save' && (
             <div className="space-y-3">
               <div>
-                <label className="block text-slate-300 font-semibold mb-1">
+                <label className="block text-neutral-300 font-semibold mb-1">
                   Project Name:
                 </label>
                 <input
@@ -144,20 +147,20 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
                   value={projectName}
                   onChange={(e) => setProjectName(e.target.value)}
                   placeholder="e.g. FactorialRecursion"
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:ring-1 focus:ring-cyan-500 font-mono"
+                  className="w-full bg-[#181818] border border-[#333333] focus:border-[#666666] rounded-md px-3.5 py-2 text-xs text-white focus:outline-none font-mono"
                 />
               </div>
               <div className="flex items-center justify-between pt-2">
                 <button
                   onClick={handleExportJava}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-slate-300 transition-colors font-medium text-xs"
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#242424] hover:bg-[#323232] border border-[#444444] text-neutral-200 transition-colors font-medium text-xs cursor-pointer"
                 >
-                  <Download className="w-3.5 h-3.5 text-cyan-400" />
+                  <Download className="w-3.5 h-3.5 text-neutral-300" />
                   <span>Export .java File</span>
                 </button>
                 <button
                   onClick={handleSave}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs shadow-sm transition-colors"
+                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-md bg-[#242424] hover:bg-[#323232] border border-[#555555] text-white font-semibold text-xs shadow-sm transition-colors cursor-pointer"
                 >
                   <Save className="w-3.5 h-3.5" />
                   <span>{saveSuccess ? 'Saved!' : 'Save Project'}</span>
@@ -167,11 +170,11 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
           )}
 
           {/* Saved Projects List */}
-          <div className="space-y-2 pt-2 border-t border-slate-800">
-            <div className="flex items-center justify-between text-slate-400 font-semibold">
+          <div className="space-y-2 pt-2 border-t border-[#222222]">
+            <div className="flex items-center justify-between text-neutral-400 font-semibold">
               <span>Saved Projects ({projects.length})</span>
-              <label className="flex items-center gap-1 text-[11px] text-cyan-400 hover:text-cyan-300 cursor-pointer">
-                <Upload className="w-3 h-3" />
+              <label className="flex items-center gap-1.5 text-[11px] text-neutral-300 hover:text-white cursor-pointer transition-colors">
+                <Upload className="w-3 h-3 text-neutral-400" />
                 <span>Import .java File</span>
                 <input
                   type="file"
@@ -183,7 +186,7 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
             </div>
 
             {projects.length === 0 ? (
-              <div className="p-4 rounded bg-slate-950/60 border border-slate-800/80 text-center text-slate-500">
+              <div className="p-4 rounded-md bg-[#0d0d0d] border border-[#262626] text-center text-neutral-500">
                 No saved projects found in local storage.
               </div>
             ) : (
@@ -195,15 +198,15 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
                       onLoadCode(proj.code, proj.name);
                       onClose();
                     }}
-                    className="p-2.5 rounded-lg bg-slate-950 hover:bg-slate-800/70 border border-slate-800 hover:border-slate-700 cursor-pointer flex items-center justify-between transition-colors group"
+                    className="p-2.5 rounded-md bg-[#181818] hover:bg-[#222222] border border-[#2a2a2a] hover:border-[#444444] cursor-pointer flex items-center justify-between transition-colors group"
                   >
                     <div className="flex items-center gap-2">
-                      <FileCode className="w-4 h-4 text-cyan-400" />
+                      <FileCode className="w-4 h-4 text-neutral-400" />
                       <div>
-                        <span className="font-semibold text-slate-200 block text-xs">
+                        <span className="font-semibold text-neutral-200 block text-xs">
                           {proj.name}
                         </span>
-                        <span className="text-[10px] text-slate-500 flex items-center gap-1 font-mono">
+                        <span className="text-[10px] text-neutral-500 flex items-center gap-1 font-mono">
                           <Clock className="w-2.5 h-2.5" />
                           {proj.updatedAt}
                         </span>
@@ -213,7 +216,7 @@ export const SaveOpenModal: React.FC<SaveOpenModalProps> = ({
                       <button
                         onClick={(e) => handleDelete(proj.id, e)}
                         title="Delete project"
-                        className="p-1 rounded hover:bg-rose-950/60 text-slate-500 hover:text-rose-400 transition-colors opacity-0 group-hover:opacity-100"
+                        className="p-1 rounded hover:bg-[#333333] text-neutral-500 hover:text-neutral-200 transition-colors opacity-0 group-hover:opacity-100"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
                       </button>

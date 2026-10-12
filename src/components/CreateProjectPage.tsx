@@ -86,20 +86,20 @@ export const CreateProjectPage: React.FC<CreateProjectPageProps> = ({
   };
 
   return (
-    <div className="min-h-screen bg-black text-white flex flex-col font-sans selection:bg-neutral-800 selection:text-white antialiased">
+    <div className="h-screen w-full overflow-y-auto bg-black text-white flex flex-col font-sans selection:bg-neutral-800 selection:text-white antialiased">
       {/* Top Header - Minimal & Aligned */}
-      <header className="w-full px-6 py-4 flex items-center justify-between border-b border-[#222222] bg-black sticky top-0 z-20">
-        <div className="flex items-center gap-3">
+      <header className="w-full px-3 sm:px-6 py-3 sm:py-4 flex items-center justify-between border-b border-[#222222] bg-black sticky top-0 z-20 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-3">
           <button
             type="button"
             onClick={onCancel}
-            className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:text-white bg-[#242424] hover:bg-[#323232] border border-[#444444] hover:border-[#555555] rounded-md transition-colors cursor-pointer"
+            className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-neutral-300 hover:text-white bg-[#242424] hover:bg-[#323232] border border-[#444444] hover:border-[#555555] rounded-md transition-colors cursor-pointer"
             title="Back to Landing Page"
           >
             <ArrowLeft className="w-3.5 h-3.5" />
             <span>Back</span>
           </button>
-          <span className="text-xs uppercase font-bold tracking-widest text-neutral-300">
+          <span className="text-[11px] sm:text-xs uppercase font-bold tracking-widest text-neutral-300 truncate max-w-[150px] xs:max-w-none">
             Create Project / Program File
           </span>
         </div>
@@ -107,16 +107,17 @@ export const CreateProjectPage: React.FC<CreateProjectPageProps> = ({
         <button
           type="button"
           onClick={onOpenExisting}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:text-white bg-[#242424] hover:bg-[#323232] border border-[#444444] hover:border-[#555555] rounded-md transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-medium text-neutral-300 hover:text-white bg-[#242424] hover:bg-[#323232] border border-[#444444] hover:border-[#555555] rounded-md transition-colors cursor-pointer"
         >
           <FolderOpen className="w-3.5 h-3.5 text-neutral-400" />
-          <span>Open Existing File</span>
+          <span className="hidden xs:inline">Open Existing File</span>
+          <span className="xs:hidden">Open File</span>
         </button>
       </header>
 
       {/* Main Form Container - Centered Card */}
-      <main className="flex-1 flex flex-col justify-center max-w-3xl mx-auto w-full px-4 sm:px-6 py-8">
-        <div className="bg-[#121212] border border-[#2a2a2a] rounded-lg p-6 sm:p-8 shadow-2xl">
+      <main className="flex-1 max-w-3xl mx-auto w-full px-3 sm:px-6 py-4 sm:py-8 pb-16">
+        <div className="bg-[#121212] border border-[#2a2a2a] rounded-lg p-4 sm:p-8 shadow-2xl">
           <form onSubmit={handleCreate} className="space-y-6">
             {/* Step 1: Program File Name */}
             <div className="space-y-2">
@@ -384,7 +385,7 @@ export const CreateProjectPage: React.FC<CreateProjectPageProps> = ({
                     <CheckCircle2 className="w-3.5 h-3.5 text-neutral-400" /> Validated Java Syntax
                   </span>
                 </div>
-                <pre className="p-3.5 rounded-md bg-[#0d0d0d] border border-[#262626] font-mono text-xs text-neutral-300 overflow-x-auto max-h-44 leading-relaxed">
+                <pre className="p-3.5 rounded-md bg-[#0d0d0d] border border-[#262626] font-mono text-xs text-neutral-300 overflow-auto max-h-52 leading-relaxed">
                   {getInitialCode()}
                 </pre>
               </div>
