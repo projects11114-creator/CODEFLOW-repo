@@ -503,8 +503,10 @@ public class Main {
 
         System.out.println();
         if (foundIndex != -1) {
+            System.out.println("Element found at position: " + (foundIndex + 1));
             System.out.println("Target " + target + " found at index: " + foundIndex + " (Position: " + (foundIndex + 1) + ")");
         } else {
+            System.out.println("Element not found");
             System.out.println("Target " + target + " was not found in the sorted array.");
         }
     }

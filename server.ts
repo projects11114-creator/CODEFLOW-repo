@@ -173,16 +173,19 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
   if (!javacInfo.available) {
     if (code.includes('Scanner')) {
       const sessionId = 'cf_ast_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+      const astResult = JavaExecutionEngine.executeAndTrace(code, '');
+      const initialStdout = astResult.stdout || '';
+
       const session: ExecutionSession = {
         id: sessionId,
         isAst: true,
         code,
         accumulatedInput: '',
         tmpDir: '',
-        stdout: '',
-        stderr: '',
-        status: 'running',
-        exitCode: null,
+        stdout: initialStdout,
+        stderr: astResult.stderr || '',
+        status: astResult.capabilityStatus === 'waiting_for_input' ? 'running' : (astResult.success ? 'completed' : 'error'),
+        exitCode: astResult.capabilityStatus === 'waiting_for_input' ? null : (astResult.success ? 0 : 1),
         createdAt: Date.now(),
         lastActivity: Date.now(),
         currentSeq: 0,
@@ -191,19 +194,42 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
         timeoutTimer: null,
       };
       activeSessions.set(sessionId, session);
-      emitSessionEvent(session, {
-        type: 'status',
-        data: 'Interactive Scanner active: Enter input below and click Send (e.g. "5" then "64 25 12 22 11"):',
-      });
+
+      // Emit status banner if waiting for input
+      if (astResult.capabilityStatus === 'waiting_for_input') {
+        emitSessionEvent(session, {
+          type: 'status',
+          data: 'Interactive Scanner active: Enter input below and click Send (e.g. "5" then "64 25 12 22 11"):',
+        });
+      }
+
+      // Emit initial program output (e.g. "Enter number of elements: ")
+      if (initialStdout) {
+        emitSessionEvent(session, {
+          type: 'stdout',
+          data: initialStdout,
+        });
+      }
+
+      // If program already ended without waiting for input, emit exit event
+      if (astResult.capabilityStatus !== 'waiting_for_input') {
+        emitSessionEvent(session, {
+          type: 'exit',
+          exitCode: astResult.success ? 0 : 1,
+        });
+      }
+
       return res.json({
-        success: true,
-        sessionId,
-        status: 'running',
+        success: astResult.success,
+        sessionId: astResult.capabilityStatus === 'waiting_for_input' ? sessionId : null,
+        status: session.status,
         executedVia: 'ast_engine',
-        trace: [],
-        diagnostics: [],
-        capabilityStatus: 'waiting_for_input',
-        unsupportedConstructNote: 'Interactive Scanner mode: Console input is processed live in the AST Engine.',
+        stdout: initialStdout,
+        stderr: astResult.stderr || '',
+        trace: astResult.trace,
+        diagnostics: astResult.diagnostics,
+        capabilityStatus: astResult.capabilityStatus,
+        unsupportedConstructNote: astResult.unsupportedConstructNote,
       });
     }
 

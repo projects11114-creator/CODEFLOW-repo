@@ -280,11 +280,11 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
           <div className="flex-1 p-3 overflow-y-auto space-y-1 select-text bg-[#050505]">
             {consoleEntries.length > 0 ? (
               <div className="font-mono text-xs leading-relaxed">
-                {consoleEntries.map((entry) => {
+                {consoleEntries.map((entry, idx) => {
                   if (entry.type === 'stdout') {
                     return (
                       <span
-                        key={entry.id}
+                        key={`${entry.id}-${idx}`}
                         className="text-emerald-400 whitespace-pre-wrap font-mono"
                       >
                         {entry.text}
@@ -294,7 +294,7 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                   if (entry.type === 'stderr') {
                     return (
                       <div
-                        key={entry.id}
+                        key={`${entry.id}-${idx}`}
                         className="text-rose-400 whitespace-pre-wrap font-mono my-0.5"
                       >
                         {entry.text}
@@ -304,7 +304,7 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                   if (entry.type === 'stdin') {
                     return (
                       <div
-                        key={entry.id}
+                        key={`${entry.id}-${idx}`}
                         className="flex items-center gap-1.5 my-1 font-mono text-cyan-300 font-semibold"
                       >
                         <span className="text-cyan-500 font-bold select-none">&gt;</span>
@@ -316,7 +316,7 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                   }
                   if (entry.type === 'status') {
                     return (
-                      <div key={entry.id} className="text-[#666666] italic text-[11px] my-1 font-mono">
+                      <div key={`${entry.id}-${idx}`} className="text-[#666666] italic text-[11px] my-1 font-mono">
                         {entry.text}
                       </div>
                     );

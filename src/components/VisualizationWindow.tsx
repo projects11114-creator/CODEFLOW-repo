@@ -425,12 +425,12 @@ export const VisualizationWindow: React.FC<VisualizationWindowProps> = ({
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                {variablesList.map((variable) => {
+                {variablesList.map((variable, vIdx) => {
                   const isActive = currentStep.activeVariableKey === variable.name;
                   const hasChanged = variable.hasChanged;
                   return (
                     <div
-                      key={variable.name}
+                      key={`${variable.scope || 'main'}-${variable.name}-${vIdx}`}
                       className={`relative rounded-lg p-3 transition-all duration-300 border ${
                         isActive
                           ? 'bg-[#151515] border-cyan-500 shadow-md shadow-cyan-500/20 ring-1 ring-cyan-500'
@@ -495,16 +495,16 @@ export const VisualizationWindow: React.FC<VisualizationWindowProps> = ({
               </span>
             </div>
             <div className="space-y-3">
-              {heapArrays.map((arr) => {
+              {heapArrays.map((arr, aIdx) => {
                 const elements = arr.elements || [];
                 return (
                   <div
-                    key={arr.id}
+                    key={`${arr.id || arr.name}-${aIdx}`}
                     className="p-3 rounded-lg bg-[#101010] border border-[#292929] space-y-2"
                   >
                     <div className="flex items-center justify-between text-xs">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono font-bold text-blue-300">{arr.name}</span>
+                         <span className="font-mono font-bold text-blue-300">{arr.name}</span>
                         <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-950 text-blue-300 border border-blue-800 font-mono">
                           {arr.type} [length: {elements.length}]
                         </span>
@@ -526,7 +526,7 @@ export const VisualizationWindow: React.FC<VisualizationWindowProps> = ({
 
                         return (
                           <div
-                            key={idx}
+                            key={`${arr.id || arr.name}-elem-${idx}`}
                             className={`flex flex-col items-center border rounded-md min-w-[50px] transition-all duration-200 ${
                               isSwapping
                                 ? 'bg-amber-950/80 border-amber-400 ring-2 ring-amber-500/60 shadow-lg shadow-amber-500/30 scale-105'
@@ -649,7 +649,7 @@ export const VisualizationWindow: React.FC<VisualizationWindowProps> = ({
             <div className="flex flex-col-reverse gap-1.5">
               {callStack.map((frame, index) => (
                 <div
-                  key={frame.frameId}
+                  key={`${frame.frameId || frame.methodName}-${index}`}
                   className={`p-2 rounded border text-xs font-mono flex items-center justify-between ${
                     index === callStack.length - 1
                       ? 'bg-[#181818] border-cyan-700/60 text-cyan-200 shadow-sm'

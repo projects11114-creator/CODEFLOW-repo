@@ -158,7 +158,20 @@ export default function App() {
           setCurrentStepIndex(0);
         }
         if (astResult.stdout) {
+          const prevLen = consoleOutput.length;
+          const newDelta = astResult.stdout.slice(prevLen);
           setConsoleOutput(astResult.stdout);
+          if (newDelta) {
+            setConsoleEntries((prev) => [
+              ...prev,
+              {
+                id: `out-client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                type: 'stdout',
+                text: newDelta,
+                timestamp: Date.now(),
+              },
+            ]);
+          }
         }
         if (astResult.stderr) {
           setConsoleStderr(astResult.stderr);
@@ -422,6 +435,27 @@ export default function App() {
         setProcessExitCode(isWaiting ? null : data.success ? 0 : 1);
         setConsoleOutput(data.stdout || '');
         setConsoleStderr(data.stderr || '');
+        if (data.stdout) {
+          setConsoleEntries([
+            {
+              id: 'out-direct-' + Date.now(),
+              type: 'stdout',
+              text: data.stdout,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
+        if (data.stderr) {
+          setConsoleEntries((prev) => [
+            ...prev,
+            {
+              id: 'err-direct-' + Date.now(),
+              type: 'stderr',
+              text: data.stderr,
+              timestamp: Date.now(),
+            },
+          ]);
+        }
         if (data.success && !code.includes('Scanner')) {
           setIsPlaying(true);
         }

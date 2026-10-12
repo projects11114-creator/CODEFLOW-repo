@@ -374,7 +374,7 @@ export class JavaExecutionEngine {
    * Produces complete, high-fidelity execution traces across variables, 1D/2D arrays,
    * loops, recursion, objects, linked lists, and algorithms.
    */
-  public static executeAndTrace(code: string, standardInput?: string): ExecutionResult {
+  public static executeAndTrace(code: string, standardInput: string = ''): ExecutionResult {
     const startTime = performance.now();
     const diagnostics = this.analyzeCode(code);
     const fatalErrors = diagnostics.filter(
@@ -416,10 +416,10 @@ export class JavaExecutionEngine {
     let capabilityStatus: VisualizationCapability = 'fully_supported';
     let unsupportedNote: string | undefined = undefined;
 
-    if (hasScanner && standardInput === undefined) {
+    if (hasScanner && !standardInput) {
       capabilityStatus = 'waiting_for_input';
       unsupportedNote =
-        'Interactive Scanner mode: Console input is executed live in the JVM; 3D view displays memory structures in real time.';
+        'Interactive Scanner mode: Console input is executed live in the AST Engine; 3D view displays memory structures in real time.';
     } else if (hasCustomClasses) {
       unsupportedNote =
         'Custom OOP Class mode: Dynamic objects and reference fields are rendered in the 3D Heap.';
@@ -584,6 +584,13 @@ export class JavaExecutionEngine {
       }
     }
 
+    // Method Executor & Expression Evaluator
+    let executeMethod: (
+      methodDef: (typeof methods)[string],
+      args: any[],
+      methodName: string
+    ) => any;
+
     // Expression Evaluator
     const evaluateExpr = (exprStr: string, localScope: Record<string, VariableInfo>): any => {
       let expr = exprStr.trim();
@@ -711,14 +718,23 @@ export class JavaExecutionEngine {
       }
 
       // Method call (including recursion)
-      const methodCallMatch = expr.match(/^([a-zA-Z_]\w*)\(([^)]*)\)$/);
+      const methodCallMatch = expr.match(/^([a-zA-Z_]\w*)\s*\(([\s\S]*)\)$/);
       if (methodCallMatch) {
         const methodName = methodCallMatch[1];
         const argStr = methodCallMatch[2].trim();
         const targetMethod = methods[methodName];
         if (targetMethod) {
           const evaluatedArgs = argStr
-            ? splitTopLevel(argStr, ',').map((a) => evaluateExpr(a, localScope))
+            ? splitTopLevel(argStr, ',').map((a) => {
+                const trimmedArg = a.trim();
+                if (heap[trimmedArg]) {
+                  return { __isHeapRef: true, heapKey: trimmedArg };
+                }
+                if (localScope[trimmedArg]?.heapKey) {
+                  return { __isHeapRef: true, heapKey: localScope[trimmedArg].heapKey };
+                }
+                return evaluateExpr(trimmedArg, localScope);
+              })
             : [];
           return executeMethod(targetMethod, evaluatedArgs, methodName);
         }
@@ -812,145 +828,54 @@ export class JavaExecutionEngine {
       }
     };
 
-    // Recursive Method Execution Handler
-    let recursionDepth = 0;
-    const MAX_RECURSION_DEPTH = 15;
-    const executeMethod = (
-      methodDef: (typeof methods)[string],
-      args: any[],
-      methodName: string
-    ): any => {
-      recursionDepth++;
-      if (recursionDepth > MAX_RECURSION_DEPTH) {
-        throw new Error('StackOverflowError: recursive limit reached');
-      }
-
-      const frameId = `frame-${methodName}-${callStack.length + 1}`;
-      const isRecursive = callStack.some((f) => f.methodName === methodName);
-
-      const methodFrame: StackFrame = {
-        frameId,
-        methodName,
-        className: 'Main',
-        line: methodDef.startLine,
-        locals: {},
-        isRecursive,
-        depth: callStack.length,
-        args: {},
-      };
-
-      // Bind parameters
-      methodDef.params.forEach((param, idx) => {
-        const val = normalizeValueForType(param.type, args[idx]);
-        const varInfo: VariableInfo = {
-          name: param.name,
-          type: param.type,
-          value: val,
-          scope: methodName,
-          hasChanged: true,
-        };
-        methodFrame.locals[param.name] = varInfo;
-        if (methodFrame.args) methodFrame.args[param.name] = val;
-        variables[`${methodName}_${callStack.length}.${param.name}`] = varInfo;
-      });
-
-      callStack.push(methodFrame);
-      createStep(
-        methodDef.startLine,
-        `Invoked ${isRecursive ? 'recursive ' : ''}method ${methodName}(${args.map((a) => JSON.stringify(a)).join(', ')}): Stack frame pushed (Depth ${callStack.length})`,
-        isRecursive ? 'recursion_frame' : 'method_call'
-      );
-
-      let returnValue: any = undefined;
-
-      for (const bLine of methodDef.bodyLines) {
-        const lineText = bLine.text;
-        const lineNum = bLine.lineNum;
-
-        if (!lineText || lineText.startsWith('//') || lineText === '{' || lineText === '}') {
-          continue;
-        }
-
-        // Return statement: return result; or return n * factorial(n - 1);
-        const returnMatch = lineText.match(/^return(?:\s+(.*?))?;?$/);
-        if (returnMatch) {
-          const retExpr = returnMatch[1];
-          returnValue = retExpr
-            ? normalizeValueForType(methodDef.returnType, evaluateExpr(retExpr, methodFrame.locals))
-            : undefined;
-          methodFrame.returnValue = returnValue;
-          createStep(
-            lineNum,
-            `Method ${methodName}() returned ${JSON.stringify(returnValue)}`,
-            'method_return'
-          );
-          break;
-        }
-
-        // If condition in recursive method
-        const ifMatch = lineText.match(/^if\s*\((.*)\)\s*(?:return\s*(.*?);)?\{?/);
-        if (ifMatch) {
-          const ifCond = ifMatch[1];
-          const condRes = Boolean(evaluateExpr(ifCond, methodFrame.locals));
-          createStep(
-            lineNum,
-            `Evaluated if (${ifCond}) -> ${condRes}`,
-            'branch_condition',
-            {
-              branchDecision: {
-                condition: ifCond,
-                result: condRes,
-                explanation: `Condition evaluated: ${ifCond} -> ${condRes}`,
-                branchTaken: condRes ? 'Base case matched' : 'Recurse branch',
-              },
-            }
-          );
-          if (condRes && ifMatch[2]) {
-            returnValue = normalizeValueForType(methodDef.returnType, evaluateExpr(ifMatch[2], methodFrame.locals));
-            methodFrame.returnValue = returnValue;
-            createStep(
-              lineNum,
-              `Base case reached: return ${JSON.stringify(returnValue)}`,
-              'method_return'
-            );
-            break;
-          }
-        }
-      }
-
-      callStack.pop();
-      recursionDepth--;
-      methodDef.params.forEach((p) => {
-        delete variables[`${methodName}_${callStack.length + 1}.${p.name}`];
-      });
-
-      createStep(
-        methodDef.endLine,
-        `Popped stack frame [${methodName}]: Returning ${JSON.stringify(returnValue)} to caller`,
-        'method_return'
-      );
-
-      return returnValue;
-    };
-
-    // Recursive Statement Execution Engine for Main.main and nested blocks
+    // Recursive Statement Execution Engine & Method Handler
     try {
       let stepCount = 0;
-      const MAX_STEPS = 1200;
+      const MAX_STEPS = 3000;
       let lastSwapCandidate: { arrName: string; idx: number; tempVar?: string; val: any } | null = null;
+      let recursionDepth = 0;
+      const MAX_RECURSION_DEPTH = 50;
 
       const extractBlock = (
         list: { lineNum: number; text: string }[],
         startIdx: number
       ): { bodyLines: { lineNum: number; text: string }[]; endIdx: number } => {
+        const startText = list[startIdx]?.text || '';
+        let hasBrace = startText.includes('{');
+        let braceStartLine = startIdx;
+        if (!hasBrace && startIdx + 1 < list.length && list[startIdx + 1].text.trim().startsWith('{')) {
+          hasBrace = true;
+          braceStartLine = startIdx + 1;
+        }
+
+        if (!hasBrace) {
+          const parenIdx = startText.lastIndexOf(')');
+          if (parenIdx !== -1 && parenIdx < startText.length - 1) {
+            const rest = startText.substring(parenIdx + 1).trim();
+            if (rest && rest !== ';') {
+              return {
+                bodyLines: [{ lineNum: list[startIdx].lineNum, text: rest }],
+                endIdx: startIdx,
+              };
+            }
+          }
+          if (startIdx + 1 < list.length) {
+            return {
+              bodyLines: [list[startIdx + 1]],
+              endIdx: startIdx + 1,
+            };
+          }
+          return { bodyLines: [], endIdx: startIdx };
+        }
+
         let brace = 0;
         let started = false;
         let endIdx = startIdx;
         const bodyLines: { lineNum: number; text: string }[] = [];
 
-        for (let k = startIdx; k < list.length; k++) {
+        for (let k = braceStartLine; k < list.length; k++) {
           const text = list[k].text;
-          const searchStart = k === startIdx && text.includes('{') ? text.indexOf('{') : 0;
+          const searchStart = k === braceStartLine && text.includes('{') ? text.indexOf('{') : 0;
           let hitZero = false;
 
           for (let ci = searchStart; ci < text.length; ci++) {
@@ -968,7 +893,7 @@ export class JavaExecutionEngine {
               break;
             }
           }
-          if (k > startIdx && !hitZero) {
+          if (k > braceStartLine && !hitZero) {
             bodyLines.push(list[k]);
           }
           if (hitZero) break;
@@ -976,10 +901,124 @@ export class JavaExecutionEngine {
         return { bodyLines, endIdx };
       };
 
-      const executeBlock = (
+      let executeBlock: (
         stmtList: { lineNum: number; text: string }[],
         localScope: Record<string, VariableInfo>
-      ) => {
+      ) => any;
+
+      executeMethod = (
+        methodDef: (typeof methods)[string],
+        args: any[],
+        methodName: string
+      ): any => {
+        recursionDepth++;
+        if (recursionDepth > MAX_RECURSION_DEPTH) {
+          throw new Error('StackOverflowError: recursive limit reached');
+        }
+
+        const frameId = `frame-${methodName}-${callStack.length + 1}`;
+        const isRecursive = callStack.some((f) => f.methodName === methodName);
+
+        const methodFrame: StackFrame = {
+          frameId,
+          methodName,
+          className: 'Main',
+          line: methodDef.startLine,
+          locals: {},
+          isRecursive,
+          depth: callStack.length,
+          args: {},
+        };
+
+        // Bind parameters
+        methodDef.params.forEach((param, idx) => {
+          const rawArg = args[idx];
+          if (param.type.includes('[]')) {
+            let heapKey = '';
+            if (rawArg && typeof rawArg === 'object' && rawArg.__isHeapRef) {
+              heapKey = rawArg.heapKey;
+            } else if (typeof rawArg === 'string' && heap[rawArg]) {
+              heapKey = rawArg;
+            } else if (heap['arr']) {
+              heapKey = 'arr';
+            }
+            if (heapKey && heap[heapKey]) {
+              heap[param.name] = heap[heapKey];
+              const varInfo: VariableInfo = {
+                name: param.name,
+                type: param.type,
+                value: `[${heap[heapKey].elements ? heap[heapKey].elements.join(', ') : ''}]`,
+                scope: methodName,
+                hasChanged: true,
+                heapKey,
+              };
+              methodFrame.locals[param.name] = varInfo;
+              variables[param.name] = varInfo;
+              if (methodFrame.args) methodFrame.args[param.name] = varInfo.value;
+              return;
+            }
+          }
+
+          const val = normalizeValueForType(param.type, rawArg);
+          const varInfo: VariableInfo = {
+            name: param.name,
+            type: param.type,
+            value: val,
+            scope: methodName,
+            hasChanged: true,
+          };
+          methodFrame.locals[param.name] = varInfo;
+          variables[param.name] = varInfo;
+          if (methodFrame.args) methodFrame.args[param.name] = val;
+          variables[`${methodName}_${callStack.length}.${param.name}`] = varInfo;
+        });
+
+        callStack.push(methodFrame);
+        createStep(
+          methodDef.startLine,
+          `Invoked ${isRecursive ? 'recursive ' : ''}method ${methodName}(${args
+            .map((a) => (a && typeof a === 'object' && a.__isHeapRef ? a.heapKey : JSON.stringify(a)))
+            .join(', ')}): Stack frame pushed (Depth ${callStack.length})`,
+          isRecursive ? 'recursion_frame' : 'method_call'
+        );
+
+        let returnValue: any = undefined;
+        const blockResult = executeBlock(methodDef.bodyLines, methodFrame.locals);
+        if (blockResult && typeof blockResult === 'object' && blockResult.signal === 'return') {
+          returnValue = blockResult.value;
+        } else if (methodFrame.returnValue !== undefined) {
+          returnValue = methodFrame.returnValue;
+        }
+
+        callStack.pop();
+        recursionDepth--;
+        methodDef.params.forEach((p) => {
+          delete variables[`${methodName}_${callStack.length + 1}.${p.name}`];
+          if (p.name !== 'arr' && !callStack.some((f) => f.locals[p.name])) {
+            delete variables[p.name];
+          }
+        });
+
+        if (callStack.length > 0) {
+          const topFrame = callStack[callStack.length - 1];
+          for (const [k, v] of Object.entries(topFrame.locals)) {
+            variables[k] = v;
+          }
+        }
+
+        createStep(
+          methodDef.endLine,
+          `Popped stack frame [${methodName}]: Returning ${JSON.stringify(returnValue)} to caller`,
+          'method_return'
+        );
+
+        return returnValue;
+      };
+
+      executeBlock = (
+        stmtList: { lineNum: number; text: string }[],
+        localScope: Record<string, VariableInfo>
+      ): any => {
         let idx = 0;
         while (idx < stmtList.length && stepCount < MAX_STEPS) {
           const item = stmtList[idx];
@@ -1015,7 +1054,7 @@ export class JavaExecutionEngine {
           }
 
           // 2. Scanner input read without provided stdin or when tokens are exhausted
-          if (hasScanner && (!standardInput || inputTokenIdx >= inputTokens.length) && /\b(?:nextLine|nextInt|nextDouble|nextLong|nextFloat)\b/.test(trimmed)) {
+          if (hasScanner && inputTokenIdx >= inputTokens.length && /\b(?:nextLine|nextInt|nextDouble|nextLong|nextFloat)\b/.test(trimmed)) {
             createStep(
               lineNum,
               `Interactive input waiting: User provides input via the Console Window`,
@@ -1026,7 +1065,7 @@ export class JavaExecutionEngine {
 
           // 3. For loop (handles outer AND nested loops!)
           const forMatch = trimmed.match(/^for\s*\(\s*(.*?);\s*(.*?);\s*(.*?)\)\s*\{?/);
-          if (forMatch && (!hasScanner || standardInput !== undefined)) {
+          if (forMatch) {
             const initClause = forMatch[1].trim();
             const condClause = forMatch[2].trim();
             const stepClause = forMatch[3].trim();
@@ -1090,7 +1129,9 @@ export class JavaExecutionEngine {
               if (!condResult) break;
 
               // Execute loop body
-              executeBlock(bodyLines, localScope);
+              const sig = executeBlock(bodyLines, localScope);
+              if (sig === 'break') break;
+              if (sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
 
               // Execute loop step
               if (stepClause.includes('++')) {
@@ -1125,7 +1166,7 @@ export class JavaExecutionEngine {
 
           // 4. While loop
           const whileMatch = trimmed.match(/^while\s*\((.*?)\)\s*\{?/);
-          if (whileMatch && (!hasScanner || standardInput !== undefined)) {
+          if (whileMatch) {
             const condClause = whileMatch[1].trim();
             const { bodyLines, endIdx } = extractBlock(stmtList, idx);
             idx = endIdx + 1;
@@ -1135,73 +1176,153 @@ export class JavaExecutionEngine {
               const condRes = Boolean(evaluateExpr(condClause, localScope));
               createStep(lineNum, `While condition (#${iter}): ${condClause} -> ${condRes}`, 'loop_header');
               if (!condRes) break;
-              executeBlock(bodyLines, localScope);
+              const sig = executeBlock(bodyLines, localScope);
+              if (sig === 'break') break;
+              if (sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
             }
             continue;
           }
 
-          // 5. If-Else statement
+          // 5. If-Else / Else-If chain statement
           const ifMatch = trimmed.match(/^if\s*\((.*?)\)\s*\{?/);
           if (ifMatch) {
-            const condStr = ifMatch[1].trim();
-            const { bodyLines: thenLines, endIdx: thenEnd } = extractBlock(stmtList, idx);
-            idx = thenEnd + 1;
+            const branches: {
+              cond: string | null;
+              bodyLines: { lineNum: number; text: string }[];
+              lineNum: number;
+            }[] = [];
 
-            // Check if followed by else (either on same line `} else` or on next line `else`)
-            let elseLines: { lineNum: number; text: string }[] | null = null;
-            if (stmtList[thenEnd] && stmtList[thenEnd].text.includes('else')) {
-              const { bodyLines: eLines, endIdx: eEnd } = extractBlock(stmtList, thenEnd);
-              elseLines = eLines;
-              idx = eEnd + 1;
-            } else if (idx < stmtList.length && stmtList[idx].text.trim().startsWith('else')) {
-              const { bodyLines: eLines, endIdx: eEnd } = extractBlock(stmtList, idx);
-              elseLines = eLines;
-              idx = eEnd + 1;
-            }
+            const firstCond = ifMatch[1].trim();
+            const { bodyLines: firstBody, endIdx: firstEnd } = extractBlock(stmtList, idx);
+            branches.push({ cond: firstCond, bodyLines: firstBody, lineNum });
+            let currEnd = firstEnd;
 
-            // Check if array elements are being compared (e.g. arr[j] > arr[j+1] or arr[j] < arr[minIndex])
-            const arrCompMatch = condStr.match(/([a-zA-Z_]\w*)\[([^\]]+)\]\s*(>|<|>=|<=|==|!=)\s*([a-zA-Z_]\w*)\[([^\]]+)\]/);
-            let comparedArr: string | undefined = undefined;
-            let idx1: number | undefined = undefined;
-            let idx2: number | undefined = undefined;
-            if (arrCompMatch) {
-              comparedArr = arrCompMatch[1];
-              idx1 = Number(evaluateExpr(arrCompMatch[2], localScope));
-              idx2 = Number(evaluateExpr(arrCompMatch[5], localScope));
-              if (heap[comparedArr]) {
-                heap[comparedArr].comparedIndices = [idx1, idx2];
+            while (currEnd < stmtList.length) {
+              const lineAtEnd = stmtList[currEnd].text;
+              const afterBrace = lineAtEnd.includes('}')
+                ? lineAtEnd.substring(lineAtEnd.indexOf('}') + 1).trim()
+                : '';
+
+              if (afterBrace.startsWith('else if') || /^else\s+if\s*\(/.test(afterBrace)) {
+                const m = afterBrace.match(/else\s+if\s*\((.*?)\)\s*\{?/);
+                const nextCond = m ? m[1].trim() : '';
+                const nextBlock = extractBlock(stmtList, currEnd);
+                branches.push({
+                  cond: nextCond,
+                  bodyLines: nextBlock.bodyLines,
+                  lineNum: stmtList[currEnd].lineNum,
+                });
+                currEnd = nextBlock.endIdx;
+              } else if (afterBrace.startsWith('else')) {
+                const nextBlock = extractBlock(stmtList, currEnd);
+                branches.push({
+                  cond: null,
+                  bodyLines: nextBlock.bodyLines,
+                  lineNum: stmtList[currEnd].lineNum,
+                });
+                currEnd = nextBlock.endIdx;
+                break;
+              } else if (
+                currEnd + 1 < stmtList.length &&
+                stmtList[currEnd + 1].text.trim().startsWith('else if')
+              ) {
+                const nextText = stmtList[currEnd + 1].text.trim();
+                const m = nextText.match(/^else\s+if\s*\((.*?)\)\s*\{?/);
+                const nextCond = m ? m[1].trim() : '';
+                const nextBlock = extractBlock(stmtList, currEnd + 1);
+                branches.push({
+                  cond: nextCond,
+                  bodyLines: nextBlock.bodyLines,
+                  lineNum: stmtList[currEnd + 1].lineNum,
+                });
+                currEnd = nextBlock.endIdx;
+              } else if (
+                currEnd + 1 < stmtList.length &&
+                stmtList[currEnd + 1].text.trim().startsWith('else')
+              ) {
+                const nextBlock = extractBlock(stmtList, currEnd + 1);
+                branches.push({
+                  cond: null,
+                  bodyLines: nextBlock.bodyLines,
+                  lineNum: stmtList[currEnd + 1].lineNum,
+                });
+                currEnd = nextBlock.endIdx;
+                break;
+              } else {
+                break;
               }
             }
 
-            const condResult = Boolean(evaluateExpr(condStr, localScope));
-            const val1Str = idx1 !== undefined && comparedArr && heap[comparedArr]?.elements ? heap[comparedArr].elements![idx1] : '';
-            const val2Str = idx2 !== undefined && comparedArr && heap[comparedArr]?.elements ? heap[comparedArr].elements![idx2] : '';
+            idx = currEnd + 1;
 
-            const compDesc = arrCompMatch
-              ? `Comparison: ${comparedArr}[${idx1}] (${val1Str}) ${arrCompMatch[3]} ${comparedArr}[${idx2}] (${val2Str}) -> ${condResult}`
-              : `Evaluated if (${condStr}) -> ${condResult}`;
+            // Execute the first matching branch
+            for (const branch of branches) {
+              if (branch.cond !== null) {
+                const bCond = branch.cond;
+                // Check if array elements are being compared
+                const arrCompMatch = bCond.match(
+                  /([a-zA-Z_]\w*)\[([^\]]+)\]\s*(>|<|>=|<=|==|!=)\s*([a-zA-Z_]\w*(?:\[[^\]]+\])?|\d+)/
+                );
+                let comparedArr: string | undefined = undefined;
+                let idx1: number | undefined = undefined;
+                let idx2: number | undefined = undefined;
+                if (arrCompMatch) {
+                  comparedArr = arrCompMatch[1];
+                  idx1 = Number(evaluateExpr(arrCompMatch[2], localScope));
+                  if (arrCompMatch[4].includes('[')) {
+                    const idx2Expr = arrCompMatch[4].substring(
+                      arrCompMatch[4].indexOf('[') + 1,
+                      arrCompMatch[4].indexOf(']')
+                    );
+                    idx2 = Number(evaluateExpr(idx2Expr, localScope));
+                  } else if (arrCompMatch[4] === 'pivot' || arrCompMatch[4] === 'p') {
+                    if (localScope['high'] !== undefined) {
+                      idx2 = Number(localScope['high'].value);
+                    }
+                  }
+                  if (heap[comparedArr]) {
+                    heap[comparedArr].comparedIndices =
+                      idx2 !== undefined ? [Math.min(idx1, idx2), Math.max(idx1, idx2)] : [idx1, idx1];
+                  }
+                }
 
-            createStep(lineNum, compDesc, 'branch_condition', {
-              activeArrayKey: comparedArr,
-              activeArrayIndex: idx1,
-              branchDecision: {
-                condition: condStr,
-                result: condResult,
-                explanation: compDesc,
-                branchTaken: condResult ? 'Condition True' : 'Condition False',
-              },
-            });
+                const condResult = Boolean(evaluateExpr(bCond, localScope));
+                const compDesc = `Evaluated if (${bCond}) -> ${condResult}`;
 
-            if (condResult) {
-              const didReturn = executeBlock(thenLines, localScope);
-              if (didReturn) return true;
-            } else if (elseLines) {
-              const didReturn = executeBlock(elseLines, localScope);
-              if (didReturn) return true;
-            }
+                createStep(branch.lineNum, compDesc, 'branch_condition', {
+                  activeArrayKey: comparedArr,
+                  activeArrayIndex: idx1,
+                  branchDecision: {
+                    condition: bCond,
+                    result: condResult,
+                    explanation: compDesc,
+                    branchTaken: condResult ? 'Condition True' : 'Condition False',
+                  },
+                });
 
-            if (comparedArr && heap[comparedArr]) {
-              heap[comparedArr].comparedIndices = undefined;
+                if (comparedArr && heap[comparedArr]) {
+                  heap[comparedArr].comparedIndices = undefined;
+                }
+
+                if (condResult) {
+                  const sig = executeBlock(branch.bodyLines, localScope);
+                  if (sig === 'break' || sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
+                  break; // Matching branch executed; do not evaluate subsequent else-ifs/else
+                }
+              } else {
+                // Unconditional else branch
+                createStep(branch.lineNum, 'Executing else branch', 'branch_condition', {
+                  branchDecision: {
+                    condition: 'else',
+                    result: true,
+                    explanation: 'Else branch matched',
+                    branchTaken: 'Else branch',
+                  },
+                });
+                const sig = executeBlock(branch.bodyLines, localScope);
+                if (sig === 'break' || sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
+                break;
+              }
             }
             continue;
           }
@@ -1344,13 +1465,21 @@ export class JavaExecutionEngine {
               const prevVal = heap[arrName].elements![targetIdx];
               heap[arrName].elements![targetIdx] = rhsVal;
               heap[arrName].activeIndex = targetIdx;
-              variables[arrName].value = `[${heap[arrName].elements!.map((e) => JSON.stringify(e)).join(', ')}]`;
-              variables[arrName].hasChanged = true;
+              const formattedArrVal = `[${heap[arrName].elements!.map((e) => JSON.stringify(e)).join(', ')}]`;
+              variables[arrName] = {
+                ...(variables[arrName] || { name: arrName, type: heap[arrName].type, scope: 'main' }),
+                value: formattedArrVal,
+                hasChanged: true,
+              };
+              if (arrName !== 'arr' && heap['arr'] === heap[arrName] && variables['arr']) {
+                variables['arr'].value = formattedArrVal;
+                variables['arr'].hasChanged = true;
+              }
 
               // Check if this mutation completes a swap
               let isSwap = false;
               let swapPartner = targetIdx;
-              if (lastSwapCandidate && lastSwapCandidate.arrName === arrName && lastSwapCandidate.tempVar !== undefined) {
+              if (lastSwapCandidate && (lastSwapCandidate.arrName === arrName || heap[lastSwapCandidate.arrName] === heap[arrName]) && lastSwapCandidate.tempVar !== undefined) {
                 if (lastSwapCandidate.idx !== targetIdx && (rhsExpr.trim() === lastSwapCandidate.tempVar || rhsVal === lastSwapCandidate.val)) {
                   swapPartner = lastSwapCandidate.idx;
                   heap[arrName].swappingIndices = [Math.min(swapPartner, targetIdx), Math.max(swapPartner, targetIdx)];
@@ -1483,22 +1612,18 @@ export class JavaExecutionEngine {
             const printMatch = trimmed.match(/System\.out\.print(?:ln)?\s*\((.*)\)\s*;?/);
             if (printMatch) {
               const printArg = printMatch[1];
-              if (!hasScanner || standardInput !== undefined) {
-                const trimmedArg = printArg.trim();
-                const result = trimmedArg === '' ? '' : evaluateExpr(trimmedArg, localScope);
-                const isLn = trimmed.startsWith('System.out.println');
-                const displayStr = result === null ? 'null' : String(result);
-                const chunk = displayStr + (isLn ? '\n' : '');
-                outputAccumulator += chunk;
-                createStep(
-                  lineNum,
-                  `Standard Output: System.out.print${isLn ? 'ln' : ''}(${JSON.stringify(displayStr)})`,
-                  'print',
-                  { newOutputChunk: chunk }
-                );
-              } else {
-                createStep(lineNum, `Print statement streamed from JVM`, 'print');
-              }
+              const trimmedArg = printArg.trim();
+              const result = trimmedArg === '' ? '' : evaluateExpr(trimmedArg, localScope);
+              const isLn = trimmed.startsWith('System.out.println');
+              const displayStr = result === null ? 'null' : String(result);
+              const chunk = displayStr + (isLn ? '\n' : '');
+              outputAccumulator += chunk;
+              createStep(
+                lineNum,
+                `Standard Output: System.out.print${isLn ? 'ln' : ''}(${JSON.stringify(displayStr)})`,
+                'print',
+                { newOutputChunk: chunk }
+              );
             }
             idx++;
             continue;
@@ -1541,10 +1666,12 @@ export class JavaExecutionEngine {
           if (incMatch) {
             const targetVar = incMatch[1];
             const isInc = incMatch[2] === '++';
-            const curVal = Number(variables[targetVar]?.value || 0);
+            const curVal = Number(localScope[targetVar]?.value ?? variables[targetVar]?.value ?? 0);
             const newVal = isInc ? curVal + 1 : curVal - 1;
             variables[targetVar] = {
               ...variables[targetVar],
+              name: targetVar,
+              type: variables[targetVar]?.type || 'int',
               value: newVal,
               prevValue: curVal,
               hasChanged: true,
@@ -1627,22 +1754,33 @@ export class JavaExecutionEngine {
           }
 
           // 18. Standalone Method Call: calculateSquare(x);
-          const standaloneMethodCall = trimmed.match(/^([a-zA-Z_]\w*)\(([^)]*)\);?$/);
+          const standaloneMethodCall = trimmed.match(/^([a-zA-Z_]\w*)\s*\(([\s\S]*)\)\s*;?$/);
           if (standaloneMethodCall && methods[standaloneMethodCall[1]]) {
             evaluateExpr(standaloneMethodCall[0], localScope);
             idx++;
             continue;
           }
 
-          // 19. Return statement: return; or return val;
+          // 19. Break statement: break;
+          if (trimmed === 'break;' || trimmed.startsWith('break;')) {
+            createStep(lineNum, 'Break statement reached: exiting loop', 'branch_condition');
+            return 'break';
+          }
+
+          // 20. Return statement: return; or return val;
           if (trimmed === 'return;' || /^return(?:\s+.*)?;?$/.test(trimmed)) {
-            createStep(lineNum, 'Return statement reached: exiting execution', 'method_return');
-            return true;
+            const retExpr = trimmed.replace(/^return\s*/, '').replace(/;$/, '').trim();
+            const retVal = retExpr ? evaluateExpr(retExpr, localScope) : undefined;
+            if (callStack.length > 0) {
+              callStack[callStack.length - 1].returnValue = retVal;
+            }
+            createStep(lineNum, `Return statement reached: returning ${JSON.stringify(retVal)}`, 'method_return');
+            return { signal: 'return', value: retVal };
           }
 
           idx++;
         }
-        return false;
+        return 'none';
       };
 
       // Extract main method body lines and execute
@@ -1667,10 +1805,35 @@ export class JavaExecutionEngine {
       }
 
       const mainLinesToExecute: { lineNum: number; text: string }[] = [];
-      const startK = mainOpenBrace !== -1 ? mainOpenBrace + 1 : mainStartLine;
-      const endK = mainCloseBrace !== -1 ? mainCloseBrace : lines.length;
-      for (let k = startK; k < endK; k++) {
-        mainLinesToExecute.push({ lineNum: k + 1, text: lines[k] });
+      if (mainOpenBrace !== -1 && mainCloseBrace === mainOpenBrace) {
+        const fullLine = lines[mainOpenBrace];
+        const mainIdx = fullLine.indexOf('public static void main');
+        const braceOpen = fullLine.indexOf('{', mainIdx !== -1 ? mainIdx : 0);
+        let depth = 0;
+        let braceClose = -1;
+        if (braceOpen !== -1) {
+          for (let ci = braceOpen; ci < fullLine.length; ci++) {
+            if (fullLine[ci] === '{') depth++;
+            if (fullLine[ci] === '}') {
+              depth--;
+              if (depth === 0) {
+                braceClose = ci;
+                break;
+              }
+            }
+          }
+        }
+        const bodyContent = braceClose !== -1 ? fullLine.substring(braceOpen + 1, braceClose) : '';
+        const stmts = bodyContent.split(';').map((s) => s.trim()).filter(Boolean);
+        for (const stmt of stmts) {
+          mainLinesToExecute.push({ lineNum: mainOpenBrace + 1, text: stmt + ';' });
+        }
+      } else {
+        const startK = mainOpenBrace !== -1 ? mainOpenBrace + 1 : mainStartLine;
+        const endK = mainCloseBrace !== -1 ? mainCloseBrace : lines.length;
+        for (let k = startK; k < endK; k++) {
+          mainLinesToExecute.push({ lineNum: k + 1, text: lines[k] });
+        }
       }
 
       executeBlock(mainLinesToExecute, mainFrame.locals);
@@ -1679,7 +1842,7 @@ export class JavaExecutionEngine {
 
       return {
         success: true,
-        stdout: hasScanner && !standardInput ? '' : outputAccumulator,
+        stdout: outputAccumulator,
         stderr: '',
         executionTimeMs: Math.round(performance.now() - startTime),
         trace,

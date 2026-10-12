@@ -408,13 +408,37 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
     const iVar = variablesList.find((v) => v.name === 'i');
     const jVar = variablesList.find((v) => v.name === 'j');
     const minVar = variablesList.find((v) => v.name === 'minIndex' || v.name === 'min');
+    const lowVar = variablesList.find((v) => v.name === 'low');
+    const highVar = variablesList.find((v) => v.name === 'high');
+    const pivotVar = variablesList.find((v) => v.name === 'pivot');
+    const piVar = variablesList.find((v) => v.name === 'pi');
 
     const activeI = typeof iVar?.value === 'number' ? iVar.value : undefined;
     const activeJ = typeof jVar?.value === 'number' ? jVar.value : undefined;
     const activeMin = typeof minVar?.value === 'number' ? minVar.value : undefined;
+    const activeLow = typeof lowVar?.value === 'number' ? lowVar.value : undefined;
+    const activeHigh = typeof highVar?.value === 'number' ? highVar.value : undefined;
+    const activePivot = typeof pivotVar?.value === 'number' ? pivotVar.value : undefined;
+    const activePi = typeof piVar?.value === 'number' ? piVar.value : undefined;
+
+    // Merge Sort tracking pointers
+    const lVar = variablesList.find((v) => v.name === 'l');
+    const mVar = variablesList.find((v) => v.name === 'm');
+    const rVar = variablesList.find((v) => v.name === 'r');
+    const kVar = variablesList.find((v) => v.name === 'k');
+
+    const activeL = typeof lVar?.value === 'number' ? lVar.value : undefined;
+    const activeM = typeof mVar?.value === 'number' ? mVar.value : undefined;
+    const activeR = typeof rVar?.value === 'number' ? rVar.value : undefined;
+    const activeK = typeof kVar?.value === 'number' ? kVar.value : undefined;
+
+    // Detect algorithmic modes
+    const isQuickSortMode = activeHigh !== undefined || activePivot !== undefined || activePi !== undefined;
+    const isMergeSortMode = activeL !== undefined && activeR !== undefined;
+    const pivotIndex = activeHigh !== undefined ? activeHigh : activePi;
 
     // Active swapping or comparison state from heap
-    const mainArr = heapObjects.find((o) => o.elements && o.elements.length > 0);
+    const mainArr = heapObjects.find((o) => o.name === 'arr') || heapObjects.find((o) => o.elements && o.elements.length > 0);
     const swappingIndices = mainArr?.swappingIndices;
     const comparedIndices = mainArr?.comparedIndices;
 
@@ -471,9 +495,9 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
 
     // Render Array Blocks on Platform 1
     if (mainArr && mainArr.elements && mainArr.elements.length > 0) {
-      const elems = mainArr.elements.slice(0, 10);
-      const cellW = Math.max(0.85, Math.min(1.2, 5.8 / elems.length));
-      const cellSpacing = cellW + 0.3;
+      const elems = mainArr.elements.slice(0, 20);
+      const cellW = Math.max(0.48, Math.min(1.2, 7.2 / elems.length));
+      const cellSpacing = cellW + Math.max(0.12, 0.28 * (6 / Math.max(elems.length, 1)));
       const totalW = elems.length * cellSpacing;
       const startX = P1_X - totalW / 2 + cellSpacing / 2;
       const az = 0.2;
@@ -497,15 +521,26 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
         const isJ = activeJ === eIdx;
         const isI = activeI === eIdx;
 
-        let barHeight = 1.6;
+        // Quick Sort & Merge Sort highlighting
+        const isPivot = isQuickSortMode && pivotIndex === eIdx && !isProgramEnded;
+        const isMergeActive = isMergeSortMode && activeK === eIdx && !isProgramEnded;
+        const isLeftSubarray = isMergeSortMode && activeL !== undefined && activeM !== undefined && eIdx >= activeL && eIdx <= activeM && !isProgramEnded;
+        const isRightSubarray = isMergeSortMode && activeM !== undefined && activeR !== undefined && eIdx > activeM && eIdx <= activeR && !isProgramEnded;
+        const isOutOfSubarray = isMergeSortMode && activeL !== undefined && activeR !== undefined && (eIdx < activeL || eIdx > activeR);
+
+        let barHeight = 2.0;
         if (isNumeric && maxVal > minVal) {
           const norm = (Number(elemVal) - minVal) / (maxVal - minVal);
-          barHeight = 1.1 + norm * 2.8;
+          barHeight = 1.0 + norm * 2.8;
         }
 
-        // Elevated height during swap
+        // Elevated height during swap, merge write, pivot, or comparison
         const cellY = isSwapping
           ? PLATFORM_Y + PLATFORM_THICKNESS / 2 + barHeight / 2 + 1.2
+          : isMergeActive
+          ? PLATFORM_Y + PLATFORM_THICKNESS / 2 + barHeight / 2 + 0.45
+          : isPivot
+          ? PLATFORM_Y + PLATFORM_THICKNESS / 2 + barHeight / 2 + 0.35
           : isCompared
           ? PLATFORM_Y + PLATFORM_THICKNESS / 2 + barHeight / 2 + 0.25
           : PLATFORM_Y + PLATFORM_THICKNESS / 2 + barHeight / 2;
@@ -522,7 +557,15 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
         } else if (isSwapping) {
           blockColor = 0xf59e0b; // Gold on swap
           emissiveColor = 0xd97706;
-          emissiveInt = 0.75;
+          emissiveInt = 0.8;
+        } else if (isMergeActive) {
+          blockColor = 0x10b981; // Emerald when merging into arr[k]
+          emissiveColor = 0x059669;
+          emissiveInt = 0.8;
+        } else if (isPivot) {
+          blockColor = 0xf97316; // Radiant Orange for Quick Sort Pivot
+          emissiveColor = 0xea580c;
+          emissiveInt = 0.8;
         } else if (isMin) {
           blockColor = 0xeab308; // Yellow/amber for minIndex
           emissiveColor = 0xca8a04;
@@ -531,10 +574,21 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
           blockColor = 0x8b5cf6; // Purple for comparison
           emissiveColor = 0x7c3aed;
           emissiveInt = 0.65;
+        } else if (isLeftSubarray) {
+          blockColor = 0x0284c7; // Deep sky blue for Merge Sort Left Split
+          emissiveColor = 0x0369a1;
+          emissiveInt = 0.45;
+        } else if (isRightSubarray) {
+          blockColor = 0x7c3aed; // Deep violet for Merge Sort Right Split
+          emissiveColor = 0x6d28d9;
+          emissiveInt = 0.45;
         } else if (isI || isCurrentActive) {
-          blockColor = 0x06b6d4; // Cyan for current loop index
+          blockColor = 0x06b6d4; // Cyan for current loop/pointer index
           emissiveColor = 0x0891b2;
           emissiveInt = 0.5;
+        } else if (isOutOfSubarray) {
+          blockColor = 0x0f172a; // Dimmed outside active subarray split
+          emissiveInt = 0;
         }
 
         // 3D Cuboid Block
@@ -556,10 +610,18 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
             ? 0x6ee7b7
             : isSwapping
             ? 0xfef08a
+            : isMergeActive
+            ? 0x6ee7b7
+            : isPivot
+            ? 0xfdba74
             : isMin
             ? 0xfde047
             : isCompared
             ? 0xd8b4fe
+            : isLeftSubarray
+            ? 0x38bdf8
+            : isRightSubarray
+            ? 0xc084fc
             : 0x38bdf8,
           linewidth: 2,
         });
@@ -567,11 +629,15 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
         wireMesh.position.copy(elemMesh.position);
         dynamicGroup.add(wireMesh);
 
-        // Large, clear, readable number directly on or immediately above the block (NO billboard box!)
+        // Large, clear, readable number directly on or immediately above the block
         const valColor = isProgramEnded
           ? '#6ee7b7'
           : isSwapping
           ? '#fef08a'
+          : isMergeActive
+          ? '#a7f3d0'
+          : isPivot
+          ? '#ffedd5'
           : isMin
           ? '#fde047'
           : isCompared
@@ -582,23 +648,44 @@ export const ThreeDMemoryVisualizer: React.FC<ThreeDMemoryVisualizerProps> = ({
         dynamicGroup.add(valSprite);
 
         // Small, unobtrusive index label at base
-        const idxSprite = createIndexSprite(`[${eIdx}]`, isMin ? '#facc15' : isCompared ? '#c084fc' : '#64748b');
+        const idxSprite = createIndexSprite(
+          `[${eIdx}]`,
+          isPivot ? '#fb923c' : isMergeActive ? '#34d399' : isMin ? '#facc15' : isCompared ? '#c084fc' : '#64748b'
+        );
         idxSprite.position.set(ex, PLATFORM_Y + 0.25, az + 0.95);
         dynamicGroup.add(idxSprite);
 
-        // Sleek pointer badges (i, j, min) floating cleanly above column
-        if (isMin && !isProgramEnded) {
-          const minBadge = createPointerBadgeSprite('min', '#b45309', '#fef08a');
-          minBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
-          dynamicGroup.add(minBadge);
-        } else if (isJ && !isProgramEnded) {
-          const jBadge = createPointerBadgeSprite('j', '#6d28d9', '#f3e8ff');
-          jBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
-          dynamicGroup.add(jBadge);
-        } else if (isI && !isProgramEnded && !isMin) {
-          const iBadge = createPointerBadgeSprite('i', '#0e7490', '#cffafe');
-          iBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
-          dynamicGroup.add(iBadge);
+        // Sleek pointer badges floating cleanly above column
+        if (!isProgramEnded) {
+          if (isPivot) {
+            const pivotBadge = createPointerBadgeSprite('PIVOT', '#9a3412', '#ffedd5');
+            pivotBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(pivotBadge);
+          } else if (isMergeActive) {
+            const mergeBadge = createPointerBadgeSprite('k (merge)', '#065f46', '#a7f3d0');
+            mergeBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(mergeBadge);
+          } else if (isMin) {
+            const minBadge = createPointerBadgeSprite('min', '#b45309', '#fef08a');
+            minBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(minBadge);
+          } else if (isJ) {
+            const jBadge = createPointerBadgeSprite('j', '#6d28d9', '#f3e8ff');
+            jBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(jBadge);
+          } else if (isI) {
+            const iBadge = createPointerBadgeSprite('i', '#0e7490', '#cffafe');
+            iBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(iBadge);
+          } else if (isMergeSortMode && eIdx === activeL) {
+            const lBadge = createPointerBadgeSprite('Left: l', '#075985', '#e0f2fe');
+            lBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(lBadge);
+          } else if (isMergeSortMode && activeM !== undefined && eIdx === activeM + 1) {
+            const rBadge = createPointerBadgeSprite('Right', '#5b21b6', '#ede9fe');
+            rBadge.position.set(ex, cellY + barHeight / 2 + 1.15, az);
+            dynamicGroup.add(rBadge);
+          }
         }
       });
     } else {
