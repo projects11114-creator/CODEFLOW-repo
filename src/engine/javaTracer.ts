@@ -675,7 +675,11 @@ export class JavaExecutionEngine {
       if (newArrayMatch) {
         const baseType = newArrayMatch[1];
         const sizeExpr = newArrayMatch[2];
-        const size = Number(evaluateExpr(sizeExpr, localScope));
+        const rawSize = evaluateExpr(sizeExpr, localScope);
+        const size = Number(rawSize);
+        if (isNaN(size) || size < 0) {
+          throw new Error('NegativeArraySizeException: ' + rawSize);
+        }
         const defaultElem = getDefaultArrayElement(baseType);
         return new Array(size).fill(defaultElem);
       }
@@ -1010,29 +1014,14 @@ export class JavaExecutionEngine {
             continue;
           }
 
-          // 2. Scanner input read without provided stdin
-          if (hasScanner && !standardInput && /\b(?:nextLine|nextInt|nextDouble|nextLong|nextFloat)\b/.test(trimmed)) {
-            const varDeclMatch = trimmed.match(
-              /^(?:String|int|double|float|long|short|byte|boolean)\s+([a-zA-Z_]\w*)/
-            );
-            if (varDeclMatch) {
-              const vName = varDeclMatch[1];
-              variables[vName] = {
-                name: vName,
-                type: trimmed.split(/\s+/)[0],
-                value: '<waiting for input>',
-                scope: 'main',
-                hasChanged: true,
-              };
-              localScope[vName] = variables[vName];
-            }
+          // 2. Scanner input read without provided stdin or when tokens are exhausted
+          if (hasScanner && (!standardInput || inputTokenIdx >= inputTokens.length) && /\b(?:nextLine|nextInt|nextDouble|nextLong|nextFloat)\b/.test(trimmed)) {
             createStep(
               lineNum,
               `Interactive input waiting: User provides input via the Console Window`,
               'unsupported_note'
             );
-            idx++;
-            continue;
+            throw new Error('ScannerWaitingForInput');
           }
 
           // 3. For loop (handles outer AND nested loops!)
@@ -1204,9 +1193,11 @@ export class JavaExecutionEngine {
             });
 
             if (condResult) {
-              executeBlock(thenLines, localScope);
+              const didReturn = executeBlock(thenLines, localScope);
+              if (didReturn) return true;
             } else if (elseLines) {
-              executeBlock(elseLines, localScope);
+              const didReturn = executeBlock(elseLines, localScope);
+              if (didReturn) return true;
             }
 
             if (comparedArr && heap[comparedArr]) {
@@ -1304,7 +1295,11 @@ export class JavaExecutionEngine {
                 normalizeValueForType(elemType, evaluateExpr(item, localScope))
               );
             } else if (newSizeExpr !== undefined) {
-              const size = Number(evaluateExpr(newSizeExpr, localScope));
+              const rawSize = evaluateExpr(newSizeExpr, localScope);
+              const size = Number(rawSize);
+              if (isNaN(size) || size < 0) {
+                throw new Error('NegativeArraySizeException: ' + rawSize);
+              }
               elements = new Array(size).fill(getDefaultArrayElement(elemType));
             }
 
@@ -1639,8 +1634,15 @@ export class JavaExecutionEngine {
             continue;
           }
 
+          // 19. Return statement: return; or return val;
+          if (trimmed === 'return;' || /^return(?:\s+.*)?;?$/.test(trimmed)) {
+            createStep(lineNum, 'Return statement reached: exiting execution', 'method_return');
+            return true;
+          }
+
           idx++;
         }
+        return false;
       };
 
       // Extract main method body lines and execute

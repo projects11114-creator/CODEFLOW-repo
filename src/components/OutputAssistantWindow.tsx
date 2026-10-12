@@ -218,9 +218,20 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
           {/* Terminal meta banner */}
           <div className="flex items-center justify-between px-3 py-2 border-b border-[#292929] bg-[#101010] text-[11px] shrink-0">
             <span className="flex items-center gap-1.5 text-[#A0A0A0]">
-              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
-              <span>
-                Runtime: {executedVia === 'host_jvm' ? 'OpenJDK Runtime Environment' : 'CodeFlow AST Execution Engine'}
+              <ShieldCheck
+                className={`w-3.5 h-3.5 ${
+                  executedVia === 'host_jvm' ? 'text-emerald-400' : 'text-amber-400'
+                }`}
+              />
+              <span className="flex items-center gap-1.5">
+                <span>Runtime:</span>
+                {executedVia === 'host_jvm' ? (
+                  <span className="text-emerald-300 font-medium">Real OpenJDK (Process)</span>
+                ) : (
+                  <span className="text-amber-300 font-medium bg-amber-950/40 border border-amber-800/50 px-1 rounded text-[10px]">
+                    AST Simulation
+                  </span>
+                )}
               </span>
             </span>
 

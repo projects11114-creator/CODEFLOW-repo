@@ -64,6 +64,7 @@ export default function App() {
   const pollTimerRef = useRef<any>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const processedSeqRef = useRef<Set<number>>(new Set());
+  const clientAccumulatedInputRef = useRef<string>('');
 
   // Close active session streams and background pollers
   const closeCurrentSessionStreams = useCallback(() => {
@@ -134,10 +135,56 @@ export default function App() {
     ]);
   }, [closeCurrentSessionStreams]);
 
-  // Send interactive user input to running JVM stdin
+  // Send interactive user input to running process
   const handleSendInput = useCallback(async (input: string) => {
     const currentId = activeSessionIdRef.current;
-    if (!currentId) return;
+    if (!currentId) {
+      // Client-side AST execution fallback (e.g. deployed on Vercel without host JVM)
+      const inputLine = typeof input === 'string' ? input : '';
+      clientAccumulatedInputRef.current = (clientAccumulatedInputRef.current ? clientAccumulatedInputRef.current + '\n' : '') + inputLine;
+      setConsoleEntries((prev) => [
+        ...prev,
+        {
+          id: `in-client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          type: 'stdin',
+          text: inputLine,
+          timestamp: Date.now(),
+        },
+      ]);
+      try {
+        const astResult = JavaExecutionEngine.executeAndTrace(code, clientAccumulatedInputRef.current);
+        if (astResult.trace && astResult.trace.length > 0) {
+          setTrace(astResult.trace);
+          setCurrentStepIndex(0);
+        }
+        if (astResult.stdout) {
+          setConsoleOutput(astResult.stdout);
+        }
+        if (astResult.stderr) {
+          setConsoleStderr(astResult.stderr);
+        }
+        setDiagnostics(astResult.diagnostics || []);
+        setCapabilityStatus(astResult.capabilityStatus || 'fully_supported');
+        setUnsupportedNote(astResult.unsupportedConstructNote);
+        const isWaiting = astResult.capabilityStatus === 'waiting_for_input';
+        setIsProcessRunning(isWaiting);
+        setProcessStatus(isWaiting ? 'running' : astResult.success ? 'completed' : 'error');
+        setProcessExitCode(isWaiting ? null : astResult.success ? 0 : 1);
+        if (!isWaiting && astResult.success) {
+          confetti({
+            particleCount: 40,
+            spread: 60,
+            origin: { y: 0.8 },
+          });
+        }
+      } catch (err: any) {
+        setConsoleStderr((prev) => prev + (err?.message || String(err)));
+        setIsProcessRunning(false);
+        setProcessStatus('error');
+        setProcessExitCode(1);
+      }
+      return;
+    }
     try {
       const res = await fetch(`/api/execute/interactive/input/${currentId}`, {
         method: 'POST',
@@ -369,9 +416,10 @@ export default function App() {
         }, 250);
       } else {
         // Direct AST engine completion (non-JVM mode)
-        setIsProcessRunning(false);
-        setProcessStatus(data.success ? 'completed' : 'error');
-        setProcessExitCode(data.success ? 0 : 1);
+        const isWaiting = data.capabilityStatus === 'waiting_for_input';
+        setIsProcessRunning(isWaiting);
+        setProcessStatus(isWaiting ? 'running' : data.success ? 'completed' : 'error');
+        setProcessExitCode(isWaiting ? null : data.success ? 0 : 1);
         setConsoleOutput(data.stdout || '');
         setConsoleStderr(data.stderr || '');
         if (data.success && !code.includes('Scanner')) {
@@ -380,6 +428,7 @@ export default function App() {
       }
     } catch {
       // Local AST engine fallback
+      clientAccumulatedInputRef.current = '';
       const result = JavaExecutionEngine.executeAndTrace(code);
       setTrace(result.trace);
       setCurrentStepIndex(0);
@@ -390,9 +439,10 @@ export default function App() {
       setExecutedVia('ast_engine');
       setUnsupportedNote(result.unsupportedConstructNote);
       setCapabilityStatus(result.capabilityStatus || 'fully_supported');
-      setIsProcessRunning(false);
-      setProcessStatus(result.success ? 'completed' : 'error');
-      setProcessExitCode(result.success ? 0 : 1);
+      const isWaiting = result.capabilityStatus === 'waiting_for_input';
+      setIsProcessRunning(isWaiting);
+      setProcessStatus(isWaiting ? 'running' : result.success ? 'completed' : 'error');
+      setProcessExitCode(isWaiting ? null : result.success ? 0 : 1);
       if (result.success && !code.includes('Scanner')) {
         setIsPlaying(true);
       }

@@ -478,7 +478,7 @@ app.post('/api/execute/interactive/input/:sessionId', (req: Request, res: Respon
         }
       }
 
-      if (astResult.capabilityStatus !== 'waiting_for_input' || astResult.stdout.length > 0) {
+      if (astResult.capabilityStatus !== 'waiting_for_input') {
         session.status = astResult.success ? 'completed' : 'error';
         session.exitCode = astResult.success ? 0 : 1;
         emitSessionEvent(session, { type: 'exit', exitCode: session.exitCode });
