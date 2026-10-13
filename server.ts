@@ -14,6 +14,7 @@ dotenv.config();
 
 const execAsync = promisify(exec);
 const app = express();
+app.set('trust proxy', 1);
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Enable CORS for external frontends (e.g. Vercel deployment accessing this JDK backend)
@@ -27,7 +28,147 @@ app.use((req, res, next) => {
   next();
 });
 
-app.use(express.json({ limit: '5mb' }));
+app.use(express.json({ limit: '256kb' }));
+
+// --- SECURITY & RESOURCE ISOLATION CONFIGURATION ---
+// 1. Output flood ceiling (prevents memory exhaustion from runaway loops)
+const MAX_OUTPUT_CHARS = 100 * 1024; // 100 KB max stdout/stderr
+
+// 2. Concurrency ceiling (prevents server CPU/RAM starvation on Render free tier)
+const MAX_CONCURRENT_RUNS = 5;
+
+// 3. Execution timeouts
+const TIMEOUT_BATCH_MS = 10000;       // 10s max for non-interactive programs
+const TIMEOUT_INTERACTIVE_MS = 45000; // 45s max for interactive Scanner programs
+
+// 4. Stripped environment: Java processes never inherit host secrets (GEMINI_API_KEY, RENDER_*, etc.)
+const SAFE_JVM_ENV: NodeJS.ProcessEnv = {
+  PATH: process.env.PATH || '',
+  JAVA_HOME: process.env.JAVA_HOME || '',
+  TMPDIR: os.tmpdir(),
+  LANG: 'en_US.UTF-8',
+  LC_ALL: 'en_US.UTF-8',
+};
+
+// 5. Hardened JVM flags: restrict memory and thread scheduler
+const JVM_RESOURCE_FLAGS = [
+  '-Xmx64m',                    // Cap heap memory to 64 MB
+  '-Xms16m',                    // Initial heap 16 MB
+  '-Xss256k',                   // Small stack per thread to prevent stack bombs
+  '-XX:+UseSerialGC',           // Single-threaded GC to minimize CPU contention
+  '-XX:ActiveProcessorCount=1', // Limit thread pools
+  '-XX:+TieredCompilation',
+  '-XX:TieredStopAtLevel=1',    // Fast client JIT compilation
+  '-Djava.security.egd=file:/dev/./urandom',
+];
+
+// Helper to kill entire process tree on POSIX
+function killProcessGroup(child?: ChildProcess) {
+  if (!child || !child.pid) return;
+  try {
+    if (process.platform !== 'win32' && child.pid) {
+      process.kill(-child.pid, 'SIGKILL');
+    } else {
+      child.kill('SIGKILL');
+    }
+  } catch {}
+}
+
+// 6. In-memory sliding rate limiter (30 requests per minute per IP)
+interface RateLimitEntry {
+  count: number;
+  resetAt: number;
+}
+const ipRateLimits = new Map<string, RateLimitEntry>();
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, entry] of ipRateLimits.entries()) {
+    if (now > entry.resetAt) ipRateLimits.delete(ip);
+  }
+}, 300000);
+
+function checkIpRateLimit(ip: string): boolean {
+  const now = Date.now();
+  const entry = ipRateLimits.get(ip);
+  if (!entry || now > entry.resetAt) {
+    ipRateLimits.set(ip, { count: 1, resetAt: now + 60000 });
+    return true;
+  }
+  if (entry.count >= 30) {
+    return false;
+  }
+  entry.count++;
+  return true;
+}
+
+// 7. Security Pre-Check: Prevent dangerous / hostile operations in student submissions
+function validateCodeSecurity(code: string): CompilerDiagnostic | null {
+  const securityRules: Array<{ regex: RegExp; name: string; reason: string }> = [
+    {
+      regex: /\b(ProcessBuilder|Runtime\.getRuntime\(\)\.exec|ProcessHandle|java\.lang\.Process\b)/,
+      name: 'Subprocess Execution',
+      reason: 'Spawning operating system child processes is disabled.',
+    },
+    {
+      regex: /\b(java\.net\.|javax\.net\.|Socket\b|ServerSocket\b|HttpURLConnection\b|HttpClient\b|DatagramSocket\b|URL\b|URI\b|InetAddress\b)/,
+      name: 'Network Access',
+      reason: 'Outbound network connections, sockets, and web requests are disabled.',
+    },
+    {
+      regex: /\b(java\.io\.(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile|FileDescriptor)|java\.nio\.file\.|(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile)\s+[a-zA-Z0-9_$]+\s*=|new\s+(?:File|FileInputStream|FileOutputStream|FileReader|FileWriter|RandomAccessFile)\s*\(|Files\.|Paths\.)/,
+      name: 'Filesystem Access',
+      reason: 'Direct filesystem read and write operations are prohibited on CodeFlow. Standard console I/O (Scanner, System.out, System.err, and BufferedReader with InputStreamReader(System.in)) is supported.',
+    },
+    {
+      regex: /\b(Class\.forName|java\.lang\.reflect\.|MethodHandles\.|ClassLoader|URLClassLoader)/,
+      name: 'Reflection & Dynamic Code Loading',
+      reason: 'Java reflection and dynamic class loading are restricted to maintain sandbox integrity.',
+    },
+    {
+      regex: /\b(new\s+Thread\s*\(|Thread\.sleep|ExecutorService|Executors\.|ForkJoinPool|ThreadPoolExecutor)/,
+      name: 'Concurrency / Thread Spawning',
+      reason: 'CodeFlow executes educational programs in a single-threaded environment. Spawning background threads is disabled to prevent CPU starvation.',
+    },
+    {
+      regex: /\b(System\.exit|Runtime\.getRuntime\(\)\.halt|addShutdownHook|System\.setSecurityManager|System\.setOut|System\.setErr|System\.setIn)/,
+      name: 'System Control & Stream Redirection',
+      reason: 'System termination methods and I/O stream redirection are disabled. Allow main() to exit naturally.',
+    },
+    {
+      regex: /\b(System\.load|System\.loadLibrary)/,
+      name: 'Native Libraries',
+      reason: 'Loading native system libraries (.so/.dll) is prohibited.',
+    },
+    {
+      regex: /\b(sun\.misc\.Unsafe|jdk\.internal\.misc\.Unsafe)/,
+      name: 'Unsafe Memory Manipulation',
+      reason: 'Direct off-heap memory manipulation is prohibited.',
+    },
+  ];
+
+  for (const rule of securityRules) {
+    const match = code.match(rule.regex);
+    if (match) {
+      const matchIndex = match.index || 0;
+      const linesBefore = code.substring(0, matchIndex).split('\n');
+      const lineNum = linesBefore.length;
+      const colNum = linesBefore[linesBefore.length - 1].length + 1;
+      return {
+        category: 'COMPILATION_ERROR',
+        title: `Security Policy: ${rule.name}`,
+        line: lineNum,
+        column: colNum,
+        rawMessage: `Security restriction: ${rule.reason}`,
+        friendlyExplanation: `The instruction "${match[0]}" is restricted on CodeFlow. ${rule.reason} CodeFlow supports standard algorithms, data structures, recursion, and console I/O.`,
+        suggestedCorrection: 'Remove the restricted system, network, or filesystem call.',
+        codeSnippet: code.split('\n')[lineNum - 1]?.trim() || '',
+        fixAvailable: false,
+      };
+    }
+  }
+  return null;
+}
 
 // Initialize Gemini AI SDK server-side
 const ai = process.env.GEMINI_API_KEY
@@ -126,6 +267,46 @@ interface ExecutionSession {
 
 const activeSessions = new Map<string, ExecutionSession>();
 
+// Periodic temp directory reaper: removes orphaned /tmp/codeflow_* directories older than 2 minutes
+setInterval(() => {
+  try {
+    const tmpBase = os.tmpdir();
+    const entries = fs.readdirSync(tmpBase);
+    const now = Date.now();
+    for (const entry of entries) {
+      if (entry.startsWith('codeflow_')) {
+        const fullPath = path.join(tmpBase, entry);
+        try {
+          const stats = fs.statSync(fullPath);
+          if (now - stats.mtimeMs > 120000) {
+            fs.rmSync(fullPath, { recursive: true, force: true });
+          }
+        } catch {}
+      }
+    }
+  } catch {}
+}, 120000);
+
+// Periodic session reaper: purges abandoned or completed sessions older than 2 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, session] of activeSessions.entries()) {
+    if (session.status !== 'running' && now - session.lastActivity > 60000) {
+      activeSessions.delete(id);
+    } else if (session.status === 'running' && now - session.lastActivity > 120000) {
+      session.status = 'terminated';
+      session.exitCode = 124;
+      killProcessGroup(session.child);
+      try {
+        if (session.tmpDir && fs.existsSync(session.tmpDir)) {
+          fs.rmSync(session.tmpDir, { recursive: true, force: true });
+        }
+      } catch {}
+      activeSessions.delete(id);
+    }
+  }
+}, 60000);
+
 // Centralized event dispatcher guaranteeing unique, monotonically increasing sequence numbers
 function emitSessionEvent(
   session: ExecutionSession,
@@ -140,7 +321,10 @@ function emitSessionEvent(
     timestamp: Date.now(),
     ...event,
   };
-  session.events.push(full);
+  // Bound session events to 500 max to prevent memory bloat
+  if (session.events.length < 500) {
+    session.events.push(full);
+  }
   session.lastActivity = Date.now();
 
   const payload = `data: ${JSON.stringify(full)}\n\n`;
@@ -189,6 +373,52 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
   const { code, executionMode } = req.body;
   if (typeof code !== 'string') {
     return res.status(400).json({ error: 'Source code is required' });
+  }
+  if (code.length > 65536) {
+    return res.status(400).json({ error: 'Source code exceeds maximum allowed size (64 KB).' });
+  }
+
+  // 1. Abuse prevention: IP rate limiting
+  const clientIp =
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress ||
+    'unknown';
+  if (!checkIpRateLimit(clientIp)) {
+    return res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded: Maximum 30 executions per minute per client.',
+      errorCode: 'RATE_LIMIT_EXCEEDED',
+      status: 'error',
+    });
+  }
+
+  // 2. Abuse prevention: Concurrency ceiling (max 5 simultaneous runs)
+  let currentActiveCount = 0;
+  for (const s of activeSessions.values()) {
+    if (s.status === 'running') currentActiveCount++;
+  }
+  if (currentActiveCount >= MAX_CONCURRENT_RUNS) {
+    return res.status(429).json({
+      success: false,
+      error: 'Server capacity reached (5 concurrent Java runs). Please wait a few seconds and run again.',
+      errorCode: 'SERVER_BUSY',
+      status: 'error',
+    });
+  }
+
+  // 3. Security Pre-Check: Scan for malicious/destructive APIs before executing
+  const securityDiag = validateCodeSecurity(code);
+  if (securityDiag) {
+    return res.json({
+      success: false,
+      sessionId: null,
+      status: 'compilation_error',
+      stdout: '',
+      stderr: `Security restriction: ${securityDiag.friendlyExplanation}`,
+      diagnostics: [securityDiag],
+      executedVia: 'none',
+      trace: [],
+    });
   }
 
   const javacInfo = await getJavacInfo();
@@ -288,9 +518,12 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
     const javaFile = path.join(tmpDir, 'Main.java');
     fs.writeFileSync(javaFile, code, 'utf-8');
 
-    // Compile with javac
+    // Compile with javac using isolated environment and 8-second timeout
     try {
-      await execAsync(`javac "${javaFile}"`, { timeout: 10000 });
+      await execAsync(`javac "${javaFile}"`, {
+        timeout: 8000,
+        env: SAFE_JVM_ENV,
+      });
     } catch (compileErr: any) {
       fs.rmSync(tmpDir, { recursive: true, force: true });
       const rawStderr = compileErr.stderr || compileErr.stdout || compileErr.message || '';
@@ -320,10 +553,17 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
       // AST tracing failure should not prevent real JVM execution
     }
 
-    // Spawn real interactive JVM process with standard pipes
+    // Determine safe timeout: 45s for Scanner interactive programs, 10s for batch programs
+    const isInteractive = code.includes('Scanner');
+    const executionTimeoutMs = isInteractive ? TIMEOUT_INTERACTIVE_MS : TIMEOUT_BATCH_MS;
+
+    // Spawn real hardened JVM process with isolated environment and capped memory
     const sessionId = 'cf_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-    const child = spawn('java', ['-cp', tmpDir, 'Main'], {
+    const child = spawn('java', [...JVM_RESOURCE_FLAGS, '-cp', tmpDir, 'Main'], {
+      cwd: tmpDir,
       stdio: ['pipe', 'pipe', 'pipe'],
+      env: SAFE_JVM_ENV,
+      detached: process.platform !== 'win32',
     });
 
     const session: ExecutionSession = {
@@ -344,37 +584,49 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
       timeoutTimer: null,
     };
 
-    // Auto-terminate runaway processes after 3 minutes
+    // Auto-terminate runaway processes on timeout
     session.timeoutTimer = setTimeout(() => {
       if (session.status === 'running') {
         session.status = 'terminated';
         session.exitCode = 124;
-        try {
-          child.kill('SIGKILL');
-        } catch {}
+        killProcessGroup(child);
         emitSessionEvent(session, {
           type: 'status',
-          data: '--- Process timed out after 3 minutes of inactivity ---',
+          data: `--- Program exceeded ${executionTimeoutMs / 1000}s execution time limit ---`,
         });
         emitSessionEvent(session, { type: 'exit', exitCode: 124 });
       }
-    }, 180000);
+    }, executionTimeoutMs);
 
-    // Stream genuine JVM stdout
+    // Stream JVM stdout with strict 100 KB memory ceiling
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
+      if (session.stdout.length + text.length > MAX_OUTPUT_CHARS) {
+        if (!session.stdout.includes('[Output limit reached')) {
+          session.stdout += '\n[Output limit reached (100 KB). Process terminated to protect server.]\n';
+          emitSessionEvent(session, {
+            type: 'stdout',
+            data: '\n[Output limit reached (100 KB). Process terminated to protect server.]\n',
+          });
+          killProcessGroup(child);
+        }
+        return;
+      }
       session.stdout += text;
       emitSessionEvent(session, { type: 'stdout', data: text });
     });
 
-    // Stream genuine JVM stderr
+    // Stream JVM stderr with strict 100 KB ceiling
     child.stderr.on('data', (chunk: Buffer) => {
       const text = chunk.toString('utf-8');
+      if (session.stderr.length + text.length > MAX_OUTPUT_CHARS) {
+        return;
+      }
       session.stderr += text;
       emitSessionEvent(session, { type: 'stderr', data: text });
     });
 
-    // Process termination listener
+    // Process termination listener with rapid cleanup (3s)
     child.on('close', (code, signal) => {
       if (session.timeoutTimer) {
         clearTimeout(session.timeoutTimer);
@@ -407,7 +659,7 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
       }
       session.sseClients = [];
 
-      // Clean up temporary compilation directory after 60 seconds
+      // Clean up temporary compilation directory after 3 seconds
       setTimeout(() => {
         try {
           if (fs.existsSync(tmpDir)) {
@@ -415,7 +667,7 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
           }
         } catch {}
         activeSessions.delete(sessionId);
-      }, 60000);
+      }, 3000);
     });
 
     child.on('error', (err) => {
@@ -430,6 +682,12 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
         data: `JVM Process execution error: ${err.message}\n`,
       });
       emitSessionEvent(session, { type: 'exit', exitCode: 1 });
+      try {
+        if (fs.existsSync(tmpDir)) {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        }
+      } catch {}
+      activeSessions.delete(sessionId);
     });
 
     activeSessions.set(sessionId, session);
@@ -518,6 +776,9 @@ app.post('/api/execute/interactive/input/:sessionId', (req: Request, res: Respon
   }
 
   const inputLine = typeof input === 'string' ? input : '';
+  if (inputLine.length > 4096) {
+    return res.status(400).json({ error: 'Input line exceeds maximum length (4 KB).' });
+  }
 
   // 1. Emit monotonic stdin event to preserve ordered log of user input
   const event = emitSessionEvent(session, {
@@ -610,14 +871,7 @@ app.post('/api/execute/interactive/stop/:sessionId', (req: Request, res: Respons
     session.status = 'terminated';
     session.exitCode = 130;
     if (session.child) {
-      try {
-        session.child.kill('SIGTERM');
-      } catch {}
-      setTimeout(() => {
-        try {
-          session.child?.kill('SIGKILL');
-        } catch {}
-      }, 400);
+      killProcessGroup(session.child);
     }
     emitSessionEvent(session, {
       type: 'status',
@@ -634,11 +888,40 @@ app.post('/api/execute/interactive/stop/:sessionId', (req: Request, res: Respons
   res.json({ success: true });
 });
 
-// 7. Legacy Execute API (backward compatible)
+// 7. Legacy Execute API (backward compatible & security-hardened)
 app.post('/api/execute', async (req: Request, res: Response) => {
   const { code, executionMode } = req.body;
   if (typeof code !== 'string') {
     return res.status(400).json({ error: 'Source code is required' });
+  }
+  if (code.length > 65536) {
+    return res.status(400).json({ error: 'Source code exceeds maximum allowed size (64 KB).' });
+  }
+
+  const clientIp =
+    (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() ||
+    req.socket.remoteAddress ||
+    'unknown';
+  if (!checkIpRateLimit(clientIp)) {
+    return res.status(429).json({
+      success: false,
+      error: 'Rate limit exceeded: Maximum 30 executions per minute.',
+      errorCode: 'RATE_LIMIT_EXCEEDED',
+      status: 'error',
+    });
+  }
+
+  const securityDiag = validateCodeSecurity(code);
+  if (securityDiag) {
+    return res.json({
+      success: false,
+      status: 'compilation_error',
+      stdout: '',
+      stderr: `Security restriction: ${securityDiag.friendlyExplanation}`,
+      diagnostics: [securityDiag],
+      executedVia: 'none',
+      trace: [],
+    });
   }
 
   const javacInfo = await getJavacInfo();
@@ -662,38 +945,48 @@ app.post('/api/execute', async (req: Request, res: Response) => {
   }
 
   const astResult = JavaExecutionEngine.executeAndTrace(code);
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeflow_'));
+  const javaFile = path.join(tmpDir, 'Main.java');
+
   try {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeflow_'));
-    const javaFile = path.join(tmpDir, 'Main.java');
     fs.writeFileSync(javaFile, code, 'utf-8');
 
-    try {
-      await execAsync(`javac "${javaFile}"`, { timeout: 6000 });
-      const runResult = await execAsync(`java -cp "${tmpDir}" Main`, {
+    await execAsync(`javac "${javaFile}"`, {
+      timeout: 6000,
+      env: SAFE_JVM_ENV,
+    });
+
+    const runResult = await execAsync(
+      `java ${JVM_RESOURCE_FLAGS.join(' ')} -cp "${tmpDir}" Main`,
+      {
         timeout: 4000,
-        maxBuffer: 1024 * 512,
-      });
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      return res.json({
-        ...astResult,
-        stdout: runResult.stdout || astResult.stdout,
-        stderr: runResult.stderr || '',
-        executedVia: 'host_jvm',
-        jvmVersion: javacInfo.version,
-      });
-    } catch (execErr: any) {
-      fs.rmSync(tmpDir, { recursive: true, force: true });
-      const rawErr = execErr.stderr || execErr.stdout || execErr.message || '';
-      return res.json({
-        ...astResult,
-        success: false,
-        stderr: rawErr,
-        executedVia: 'host_jvm',
-        jvmVersion: javacInfo.version,
-      });
-    }
-  } catch (err: any) {
-    return res.status(500).json({ error: 'Failed to run Java process', details: err.message });
+        maxBuffer: MAX_OUTPUT_CHARS,
+        env: SAFE_JVM_ENV,
+      }
+    );
+
+    return res.json({
+      ...astResult,
+      stdout: runResult.stdout || astResult.stdout,
+      stderr: runResult.stderr || '',
+      executedVia: 'host_jvm',
+      jvmVersion: javacInfo.version,
+    });
+  } catch (execErr: any) {
+    const rawErr = execErr.stderr || execErr.stdout || execErr.message || '';
+    return res.json({
+      ...astResult,
+      success: false,
+      stderr: rawErr,
+      executedVia: 'host_jvm',
+      jvmVersion: javacInfo.version,
+    });
+  } finally {
+    try {
+      if (fs.existsSync(tmpDir)) {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    } catch {}
   }
 });
 
