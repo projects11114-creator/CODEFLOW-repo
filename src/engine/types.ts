@@ -57,6 +57,7 @@ export interface VariableInfo {
   prevValue?: any;
   hasChanged?: boolean;
   scope: string;
+  heapKey?: string;
 }
 
 export interface StackFrame {

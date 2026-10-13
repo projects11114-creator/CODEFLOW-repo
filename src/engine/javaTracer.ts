@@ -943,11 +943,11 @@ export class JavaExecutionEngine {
               heapKey = 'arr';
             }
             if (heapKey && heap[heapKey]) {
-              heap[param.name] = heap[heapKey];
+              const heapObj = heap[heapKey];
               const varInfo: VariableInfo = {
                 name: param.name,
                 type: param.type,
-                value: `[${heap[heapKey].elements ? heap[heapKey].elements.join(', ') : ''}]`,
+                value: `[${heapObj?.elements ? heapObj.elements.join(', ') : ''}]`,
                 scope: methodName,
                 hasChanged: true,
                 heapKey,
