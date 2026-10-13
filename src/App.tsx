@@ -12,6 +12,7 @@ import { CreateProjectPage } from './components/CreateProjectPage.tsx';
 import { SAMPLE_PROGRAMS } from './engine/samples.ts';
 import { CompilerDiagnostic, ExecutionStep, SampleProgram, VisualizationCapability } from './engine/types.ts';
 import { JavaExecutionEngine } from './engine/javaTracer.ts';
+import { getApiUrl, checkBackendStatus } from './services/api.ts';
 
 export default function App() {
   // Navigation View State
@@ -20,6 +21,23 @@ export default function App() {
   // State for Code Editor
   const [code, setCode] = useState<string>(SAMPLE_PROGRAMS[0].code);
   const [selectedSampleId, setSelectedSampleId] = useState<string>(SAMPLE_PROGRAMS[0].id);
+
+  // Execution Mode & Backend Connectivity
+  const [executionModePreference, setExecutionModePreference] = useState<'real_java' | 'ast_simulation'>('real_java');
+  const [backendError, setBackendError] = useState<string | null>(null);
+  const [backendInfo, setBackendInfo] = useState<{
+    online: boolean;
+    javacAvailable: boolean;
+    javacVersion: string;
+    backendUrl: string;
+    isCustomBackend: boolean;
+  }>({
+    online: false,
+    javacAvailable: false,
+    javacVersion: '',
+    backendUrl: '',
+    isCustomBackend: false,
+  });
 
   // State for Execution & Trace
   const [trace, setTrace] = useState<ExecutionStep[]>([]);
@@ -78,21 +96,34 @@ export default function App() {
     }
   }, []);
 
-  // Fetch host JVM status on mount
+  // Fetch backend status and real JDK availability on mount
   useEffect(() => {
-    fetch('/api/status')
-      .then((res) => res.json())
-      .then((data) => {
+    checkBackendStatus()
+      .then((status) => {
+        setBackendInfo({
+          online: status.online,
+          javacAvailable: status.javacAvailable,
+          javacVersion: status.javacVersion,
+          backendUrl: status.backendUrl,
+          isCustomBackend: status.isCustomBackend,
+        });
         setSystemStatus({
-          javacAvailable: Boolean(data.javacAvailable),
-          javacVersion: data.javacVersion || '',
-          geminiConfigured: Boolean(data.geminiConfigured),
+          javacAvailable: status.javacAvailable,
+          javacVersion: status.javacVersion,
+          geminiConfigured: status.geminiConfigured,
         });
       })
       .catch(() => {
+        setBackendInfo({
+          online: false,
+          javacAvailable: false,
+          javacVersion: 'Disconnected',
+          backendUrl: '',
+          isCustomBackend: false,
+        });
         setSystemStatus({
           javacAvailable: false,
-          javacVersion: 'AST Tracer Engine',
+          javacVersion: 'Backend Offline',
           geminiConfigured: false,
         });
       });
@@ -116,7 +147,7 @@ export default function App() {
     const currentId = activeSessionIdRef.current;
     if (currentId) {
       try {
-        await fetch(`/api/execute/interactive/stop/${currentId}`, { method: 'POST' });
+        await fetch(getApiUrl(`/api/execute/interactive/stop/${currentId}`), { method: 'POST' });
       } catch {
         // ignore
       }
@@ -199,7 +230,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`/api/execute/interactive/input/${currentId}`, {
+      const res = await fetch(getApiUrl(`/api/execute/interactive/input/${currentId}`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ input }),
@@ -231,15 +262,78 @@ export default function App() {
     }
   }, []);
 
+  // Explicit client-side AST simulation fallback
+  const handleRunAstFallback = useCallback(() => {
+    closeCurrentSessionStreams();
+    setExecutionModePreference('ast_simulation');
+    setBackendError(null);
+    clientAccumulatedInputRef.current = '';
+    const startTime = performance.now();
+    const result = JavaExecutionEngine.executeAndTrace(code);
+    setTrace(result.trace);
+    setCurrentStepIndex(0);
+    setConsoleOutput(result.stdout || '');
+    setConsoleStderr(result.stderr || '');
+    setDiagnostics(result.diagnostics || []);
+    setExecutionTimeMs(Math.round(performance.now() - startTime));
+    setExecutedVia('ast_engine');
+    setUnsupportedNote(result.unsupportedConstructNote);
+    setCapabilityStatus(result.capabilityStatus || 'fully_supported');
+    const isWaiting = result.capabilityStatus === 'waiting_for_input';
+    setIsProcessRunning(isWaiting);
+    setProcessStatus(isWaiting ? 'running' : result.success ? 'completed' : 'error');
+    setProcessExitCode(isWaiting ? null : result.success ? 0 : 1);
+    setConsoleEntries([
+      {
+        id: 'ast-fallback-notice-' + Date.now(),
+        type: 'status',
+        text: '[AST Simulation Fallback] Executing program in client-side AST engine (No host JDK process active).',
+        timestamp: Date.now(),
+      },
+      ...(result.stdout
+        ? [
+            {
+              id: 'ast-out-' + Date.now(),
+              type: 'stdout' as const,
+              text: result.stdout,
+              timestamp: Date.now(),
+            },
+          ]
+        : []),
+      ...(result.stderr
+        ? [
+            {
+              id: 'ast-err-' + Date.now(),
+              type: 'stderr' as const,
+              text: result.stderr,
+              timestamp: Date.now(),
+            },
+          ]
+        : []),
+    ]);
+    if (result.success && !code.includes('Scanner')) {
+      setIsPlaying(true);
+    }
+    setMobileTab('output');
+  }, [code, closeCurrentSessionStreams]);
+
   // Handle Run
   const handleRun = useCallback(async () => {
     setIsPlaying(false);
     if (timerRef.current) clearInterval(timerRef.current);
 
+    // If user prefers AST simulation fallback, run it directly without calling JVM backend
+    if (executionModePreference === 'ast_simulation') {
+      handleRunAstFallback();
+      return;
+    }
+
+    setBackendError(null);
+
     // If an existing session is running, terminate it first
     if (activeSessionIdRef.current && isProcessRunning) {
       try {
-        fetch(`/api/execute/interactive/stop/${activeSessionIdRef.current}`, { method: 'POST' });
+        fetch(getApiUrl(`/api/execute/interactive/stop/${activeSessionIdRef.current}`), { method: 'POST' });
       } catch {
         // ignore
       }
@@ -258,16 +352,41 @@ export default function App() {
     const startTime = performance.now();
     try {
       // Start interactive process via backend API
-      const res = await fetch('/api/execute/interactive/start', {
+      const res = await fetch(getApiUrl('/api/execute/interactive/start'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code }),
+        body: JSON.stringify({ code, executionMode: 'real_java' }),
       });
+
+      if (!res.ok) {
+        let errData: any = {};
+        try {
+          errData = await res.json();
+        } catch {}
+        const errorMsg =
+          errData.error || errData.details || `Backend returned HTTP ${res.status}`;
+        setIsProcessRunning(false);
+        setProcessStatus('error');
+        setProcessExitCode(1);
+        setBackendError(errorMsg);
+        setConsoleStderr(errorMsg);
+        setConsoleEntries([
+          {
+            id: 'backend-err-' + Date.now(),
+            type: 'status',
+            text: `[Real Java Execution Unavailable]\nTarget Backend: ${backendInfo.backendUrl || 'Same-origin (/api)'}\nError: ${errorMsg}\n\nNotice: This is a real JDK failure. CodeFlow will not silently simulate this run as real Java. Click "Run in AST Fallback" or toggle to "AST Fallback" in the top navbar to run in the client-side tracer.`,
+            timestamp: Date.now(),
+          },
+        ]);
+        setMobileTab('output');
+        return;
+      }
+
       const data = await res.json();
       const duration = Math.round(performance.now() - startTime);
       setExecutionTimeMs(duration);
 
-      // Handle compilation errors
+      // Handle compilation errors from javac
       if (!data.success && data.status === 'compilation_error') {
         setIsProcessRunning(false);
         setProcessStatus('error');
@@ -378,7 +497,7 @@ export default function App() {
         };
 
         // 1. Primary: Server-Sent Events (SSE) Stream
-        const sse = new EventSource(`/api/execute/interactive/stream/${sid}`);
+        const sse = new EventSource(getApiUrl(`/api/execute/interactive/stream/${sid}`));
         eventSourceRef.current = sse;
         sse.onmessage = (event) => {
           try {
@@ -406,7 +525,7 @@ export default function App() {
         pollTimerRef.current = setInterval(async () => {
           try {
             const pollRes = await fetch(
-              `/api/execute/interactive/poll/${sid}?after=${pollSeq}`
+              getApiUrl(`/api/execute/interactive/poll/${sid}?after=${pollSeq}`)
             );
             if (pollRes.ok) {
               const pData = await pollRes.json();
@@ -428,7 +547,7 @@ export default function App() {
           }
         }, 250);
       } else {
-        // Direct AST engine completion (non-JVM mode)
+        // Direct execution completion
         const isWaiting = data.capabilityStatus === 'waiting_for_input';
         setIsProcessRunning(isWaiting);
         setProcessStatus(isWaiting ? 'running' : data.success ? 'completed' : 'error');
@@ -460,28 +579,25 @@ export default function App() {
           setIsPlaying(true);
         }
       }
-    } catch {
-      // Local AST engine fallback
-      clientAccumulatedInputRef.current = '';
-      const result = JavaExecutionEngine.executeAndTrace(code);
-      setTrace(result.trace);
-      setCurrentStepIndex(0);
-      setConsoleOutput(result.stdout || '');
-      setConsoleStderr(result.stderr || '');
-      setDiagnostics(result.diagnostics || []);
-      setExecutionTimeMs(Math.round(performance.now() - startTime));
-      setExecutedVia('ast_engine');
-      setUnsupportedNote(result.unsupportedConstructNote);
-      setCapabilityStatus(result.capabilityStatus || 'fully_supported');
-      const isWaiting = result.capabilityStatus === 'waiting_for_input';
-      setIsProcessRunning(isWaiting);
-      setProcessStatus(isWaiting ? 'running' : result.success ? 'completed' : 'error');
-      setProcessExitCode(isWaiting ? null : result.success ? 0 : 1);
-      if (result.success && !code.includes('Scanner')) {
-        setIsPlaying(true);
-      }
+    } catch (networkErr: any) {
+      // Clear error state - DO NOT SILENTLY SIMULATE!
+      const msg = networkErr?.message || 'Network request to backend failed';
+      setIsProcessRunning(false);
+      setProcessStatus('error');
+      setProcessExitCode(1);
+      setBackendError(msg);
+      setConsoleStderr(`Java backend connection error: ${msg}`);
+      setConsoleEntries([
+        {
+          id: 'conn-err-' + Date.now(),
+          type: 'status',
+          text: `[Java Backend Unreachable]\nCould not establish connection to Java execution backend at: ${backendInfo.backendUrl || window.location.origin}\nDetails: ${msg}\n\nNotice: This is a real JDK connection error. The app will not silently simulate this run as real Java.\n• To run in the browser without a JDK server, click "Run in AST Fallback" below or change the mode in the top navbar.\n• To deploy a real JDK backend, see the Dockerfile and configure JAVA_EXECUTION_API_URL.`,
+          timestamp: Date.now(),
+        },
+      ]);
+      setMobileTab('output');
     }
-  }, [code, isProcessRunning, closeCurrentSessionStreams]);
+  }, [code, isProcessRunning, executionModePreference, backendInfo, handleRunAstFallback, closeCurrentSessionStreams]);
 
   // Keyboard shortcut: F5 or Ctrl+Enter to Run
   useEffect(() => {
@@ -661,6 +777,12 @@ export default function App() {
         onOpenLoadModal={() => setSaveOpenModalMode('open')}
         onOpenGuideModal={() => setIsGuideOpen(true)}
         systemStatus={systemStatus}
+        backendInfo={backendInfo}
+        executionMode={executionModePreference}
+        onToggleExecutionMode={(mode) => {
+          setExecutionModePreference(mode);
+          setBackendError(null);
+        }}
         isProcessRunning={isProcessRunning}
         onStopProcess={handleStopProcess}
         onGoHome={() => setCurrentView('landing')}
@@ -773,6 +895,8 @@ export default function App() {
             diagnostics={diagnostics}
             executionTimeMs={executionTimeMs}
             executedVia={executedVia}
+            backendError={backendError}
+            onRunFallback={handleRunAstFallback}
             onClearOutput={() => {
               setConsoleOutput('');
               setConsoleStderr('');

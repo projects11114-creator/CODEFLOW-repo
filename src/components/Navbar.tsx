@@ -43,6 +43,15 @@ interface NavbarProps {
     javacVersion: string;
     geminiConfigured: boolean;
   };
+  backendInfo?: {
+    online: boolean;
+    javacAvailable: boolean;
+    javacVersion: string;
+    backendUrl: string;
+    isCustomBackend: boolean;
+  };
+  executionMode?: 'real_java' | 'ast_simulation';
+  onToggleExecutionMode?: (mode: 'real_java' | 'ast_simulation') => void;
   isProcessRunning?: boolean;
   onStopProcess?: () => void;
   onGoHome?: () => void;
@@ -70,6 +79,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenLoadModal,
   onOpenGuideModal,
   systemStatus,
+  backendInfo,
+  executionMode = 'real_java',
+  onToggleExecutionMode,
   isProcessRunning = false,
   onStopProcess,
   onGoHome,
@@ -340,18 +352,54 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
         )}
 
-        {/* JVM status indicator */}
+        {/* JVM / Backend status indicator */}
         <div
           title={
             systemStatus.javacAvailable
-              ? `Real JDK detected: ${systemStatus.javacVersion}`
-              : 'Using High-Precision Java AST Tracer Engine'
+              ? `Real OpenJDK detected: ${systemStatus.javacVersion} (${backendInfo?.isCustomBackend ? backendInfo.backendUrl : 'Host'})`
+              : backendInfo?.online
+              ? `Backend reachable (${backendInfo?.backendUrl || 'Host'}) but javac is missing`
+              : `Java Execution Backend is offline (${backendInfo?.backendUrl || 'Disconnected'}). Using AST Simulation fallback.`
           }
           className="flex items-center gap-1.5 px-2 py-1 rounded bg-[#151515] border border-[#292929] text-[11px] text-[#A0A0A0] cursor-help"
         >
-          <Cpu className={`w-3.5 h-3.5 ${systemStatus.javacAvailable ? 'text-emerald-400' : 'text-cyan-400'}`} />
-          <span className="hidden xl:inline">{systemStatus.javacAvailable ? 'Host JDK Active' : 'AST Tracer Engine'}</span>
+          <Cpu className={`w-3.5 h-3.5 ${systemStatus.javacAvailable ? 'text-emerald-400' : backendInfo?.online ? 'text-amber-400' : 'text-rose-400'}`} />
+          <span className="hidden xl:inline">
+            {systemStatus.javacAvailable
+              ? 'Host JDK Active'
+              : backendInfo?.online
+              ? 'No Host JDK'
+              : 'Backend Offline'}
+          </span>
         </div>
+
+        {/* Explicit Mode Selector */}
+        {onToggleExecutionMode && (
+          <div className="hidden lg:flex items-center rounded bg-[#151515] border border-[#292929] p-0.5 text-[11px]">
+            <button
+              onClick={() => onToggleExecutionMode('real_java')}
+              title="Execute using real OpenJDK compiler & process"
+              className={`px-2 py-0.5 rounded transition-colors cursor-pointer font-medium ${
+                executionMode === 'real_java'
+                  ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/60'
+                  : 'text-[#888888] hover:text-[#CCCCCC]'
+              }`}
+            >
+              Real JDK
+            </button>
+            <button
+              onClick={() => onToggleExecutionMode('ast_simulation')}
+              title="Execute using browser-based AST simulation fallback (no JDK needed)"
+              className={`px-2 py-0.5 rounded transition-colors cursor-pointer font-medium ${
+                executionMode === 'ast_simulation'
+                  ? 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
+                  : 'text-[#888888] hover:text-[#CCCCCC]'
+              }`}
+            >
+              AST Fallback
+            </button>
+          </div>
+        )}
 
         {/* Create Project / Save / Open Project */}
         {onCreateProject && (

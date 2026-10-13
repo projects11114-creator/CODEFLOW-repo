@@ -14,7 +14,18 @@ dotenv.config();
 
 const execAsync = promisify(exec);
 const app = express();
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
+
+// Enable CORS for external frontends (e.g. Vercel deployment accessing this JDK backend)
+app.use((req, res, next) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With');
+  if (req.method === 'OPTIONS') {
+    return res.sendStatus(204);
+  }
+  next();
+});
 
 app.use(express.json({ limit: '5mb' }));
 
@@ -141,6 +152,18 @@ function emitSessionEvent(
   return full;
 }
 
+// Health check endpoints for Render, load balancers, and monitoring
+app.get(['/healthz', '/api/health'], async (_req: Request, res: Response) => {
+  const javacInfo = await getJavacInfo();
+  res.status(200).json({
+    status: 'ok',
+    uptime: Math.floor(process.uptime()),
+    javacAvailable: javacInfo.available,
+    javacVersion: javacInfo.version,
+    timestamp: Date.now(),
+  });
+});
+
 // 1. System status API
 app.get('/api/status', async (_req: Request, res: Response) => {
   const javacInfo = await getJavacInfo();
@@ -152,6 +175,7 @@ app.get('/api/status', async (_req: Request, res: Response) => {
     javacAvailable: javacInfo.available,
     javacVersion: javacInfo.version,
     geminiConfigured: Boolean(process.env.GEMINI_API_KEY),
+    isJdkBackend: true,
     supportedLanguages: [
       { id: 'java', name: 'Java', version: javacInfo.version || 'SE 17/21', active: true },
       { id: 'python', name: 'Python', version: 'Coming Soon', active: false },
@@ -162,15 +186,15 @@ app.get('/api/status', async (_req: Request, res: Response) => {
 
 // 2. Interactive Execution: START
 app.post('/api/execute/interactive/start', async (req: Request, res: Response) => {
-  const { code } = req.body;
+  const { code, executionMode } = req.body;
   if (typeof code !== 'string') {
     return res.status(400).json({ error: 'Source code is required' });
   }
 
   const javacInfo = await getJavacInfo();
 
-  // If javac is not available on host system, fall back cleanly to AST simulation
-  if (!javacInfo.available) {
+  // If client explicitly requested AST simulation fallback
+  if (executionMode === 'ast_simulation') {
     if (code.includes('Scanner')) {
       const sessionId = 'cf_ast_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       const astResult = JavaExecutionEngine.executeAndTrace(code, '');
@@ -199,7 +223,7 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
       if (astResult.capabilityStatus === 'waiting_for_input') {
         emitSessionEvent(session, {
           type: 'status',
-          data: 'Interactive Scanner active: Enter input below and click Send (e.g. "5" then "64 25 12 22 11"):',
+          data: '[AST Simulation Fallback] Interactive Scanner active: Enter input below and click Send:',
         });
       }
 
@@ -244,6 +268,18 @@ app.post('/api/execute/interactive/start', async (req: Request, res: Response) =
       trace: astResult.trace,
       diagnostics: astResult.diagnostics,
       unsupportedConstructNote: astResult.unsupportedConstructNote,
+    });
+  }
+
+  // Real Java (Host JDK) requested: DO NOT silently simulate if javac is unavailable!
+  if (!javacInfo.available) {
+    return res.status(503).json({
+      success: false,
+      error: 'Host environment does not have a JDK (javac/java) installed. Cannot execute as a real Java process.',
+      errorCode: 'JDK_NOT_AVAILABLE',
+      status: 'error',
+      executedVia: 'none',
+      details: 'This backend environment has no OpenJDK installation in PATH. To simulate this program without a JDK server, switch to "AST Simulation Fallback".',
     });
   }
 
@@ -600,51 +636,65 @@ app.post('/api/execute/interactive/stop/:sessionId', (req: Request, res: Respons
 
 // 7. Legacy Execute API (backward compatible)
 app.post('/api/execute', async (req: Request, res: Response) => {
-  const { code } = req.body;
+  const { code, executionMode } = req.body;
   if (typeof code !== 'string') {
     return res.status(400).json({ error: 'Source code is required' });
   }
 
-  const astResult = JavaExecutionEngine.executeAndTrace(code);
   const javacInfo = await getJavacInfo();
 
-  if (javacInfo.available) {
-    try {
-      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeflow_'));
-      const javaFile = path.join(tmpDir, 'Main.java');
-      fs.writeFileSync(javaFile, code, 'utf-8');
-
-      try {
-        await execAsync(`javac "${javaFile}"`, { timeout: 6000 });
-        const runResult = await execAsync(`java -cp "${tmpDir}" Main`, {
-          timeout: 4000,
-          maxBuffer: 1024 * 512,
-        });
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        return res.json({
-          ...astResult,
-          stdout: runResult.stdout || astResult.stdout,
-          stderr: runResult.stderr || '',
-          executedVia: 'host_jvm',
-          jvmVersion: javacInfo.version,
-        });
-      } catch (execErr: any) {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        const rawErr = execErr.stderr || execErr.stdout || execErr.message || '';
-        return res.json({
-          ...astResult,
-          success: false,
-          stderr: rawErr,
-          executedVia: 'host_jvm',
-          jvmVersion: javacInfo.version,
-        });
-      }
-    } catch {
-      return res.json(astResult);
-    }
+  if (executionMode === 'ast_simulation') {
+    const astResult = JavaExecutionEngine.executeAndTrace(code);
+    return res.json({
+      ...astResult,
+      executedVia: 'ast_engine',
+    });
   }
 
-  return res.json(astResult);
+  if (!javacInfo.available) {
+    return res.status(503).json({
+      success: false,
+      error: 'Host environment does not have a JDK (javac/java) installed.',
+      errorCode: 'JDK_NOT_AVAILABLE',
+      executedVia: 'none',
+      details: 'Deploy to a container with OpenJDK or switch executionMode to ast_simulation.',
+    });
+  }
+
+  const astResult = JavaExecutionEngine.executeAndTrace(code);
+  try {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'codeflow_'));
+    const javaFile = path.join(tmpDir, 'Main.java');
+    fs.writeFileSync(javaFile, code, 'utf-8');
+
+    try {
+      await execAsync(`javac "${javaFile}"`, { timeout: 6000 });
+      const runResult = await execAsync(`java -cp "${tmpDir}" Main`, {
+        timeout: 4000,
+        maxBuffer: 1024 * 512,
+      });
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      return res.json({
+        ...astResult,
+        stdout: runResult.stdout || astResult.stdout,
+        stderr: runResult.stderr || '',
+        executedVia: 'host_jvm',
+        jvmVersion: javacInfo.version,
+      });
+    } catch (execErr: any) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+      const rawErr = execErr.stderr || execErr.stdout || execErr.message || '';
+      return res.json({
+        ...astResult,
+        success: false,
+        stderr: rawErr,
+        executedVia: 'host_jvm',
+        jvmVersion: javacInfo.version,
+      });
+    }
+  } catch (err: any) {
+    return res.status(500).json({ error: 'Failed to run Java process', details: err.message });
+  }
 });
 
 // 8. Static Diagnostic API

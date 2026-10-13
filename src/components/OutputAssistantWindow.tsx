@@ -15,6 +15,7 @@ import {
   CornerDownLeft,
 } from 'lucide-react';
 import { CompilerDiagnostic } from '../engine/types.ts';
+import { getApiUrl } from '../services/api.ts';
 
 export interface ConsoleEntry {
   id: string;
@@ -35,6 +36,8 @@ interface OutputAssistantWindowProps {
   diagnostics: CompilerDiagnostic[];
   executionTimeMs: number;
   executedVia: 'host_jvm' | 'ast_engine';
+  backendError?: string | null;
+  onRunFallback?: () => void;
   onClearOutput: () => void;
   onApplyFix: (fixedCode: string) => void;
   onSelectLine: (line: number) => void;
@@ -53,6 +56,8 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
   diagnostics,
   executionTimeMs,
   executedVia,
+  backendError,
+  onRunFallback,
   onClearOutput,
   onApplyFix,
   onSelectLine,
@@ -93,7 +98,7 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
     setAiExplanation(null);
     try {
       const activeDiag = diagnostics[0];
-      const res = await fetch('/api/ai/explain', {
+      const res = await fetch(getApiUrl('/api/ai/explain'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -228,12 +233,23 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                 {executedVia === 'host_jvm' ? (
                   <span className="text-emerald-300 font-medium">Real OpenJDK (Process)</span>
                 ) : (
-                  <span className="text-amber-300 font-medium bg-amber-950/40 border border-amber-800/50 px-1 rounded text-[10px]">
-                    AST Simulation
+                  <span className="text-amber-300 font-medium bg-amber-950/40 border border-amber-800/50 px-1.5 py-0.5 rounded text-[10px]" title="AST Simulation Fallback (not running in real JVM)">
+                    AST Simulation (Fallback Only)
                   </span>
                 )}
               </span>
             </span>
+
+            {/* Run in Fallback button if backend errored */}
+            {backendError && onRunFallback && (
+              <button
+                onClick={onRunFallback}
+                className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/80 hover:bg-amber-900 border border-amber-700/80 text-amber-200 text-[11px] font-sans transition-colors cursor-pointer"
+                title="Execute program via browser AST simulation without JDK backend"
+              >
+                <span>Run in AST Fallback</span>
+              </button>
+            )}
 
             {/* Dynamic Process Status Display */}
             <div className="flex items-center gap-2">
