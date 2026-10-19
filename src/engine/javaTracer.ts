@@ -218,6 +218,77 @@ export function splitTopLevel(str: string, delimiter: string): string[] {
   return parts;
 }
 
+export class ScannerInputBuffer {
+  private rawLines: string[];
+  private lineIndex: number = 0;
+  private currentLineTokens: string[] = [];
+  private tokenIndexInLine: number = 0;
+
+  constructor(input: string = '') {
+    if (!input || input.trim() === '') {
+      this.rawLines = [];
+    } else {
+      // Split strictly by \n to preserve lines for nextLine()
+      this.rawLines = input.split('\n');
+      this.loadLine(0);
+    }
+  }
+
+  private loadLine(idx: number) {
+    this.lineIndex = idx;
+    if (idx < this.rawLines.length) {
+      const line = this.rawLines[idx];
+      this.currentLineTokens = line.trim().length > 0 ? line.trim().split(/\s+/) : [];
+      this.tokenIndexInLine = 0;
+    } else {
+      this.currentLineTokens = [];
+      this.tokenIndexInLine = 0;
+    }
+  }
+
+  public hasAvailableToken(): boolean {
+    let curLine = this.lineIndex;
+    let curTok = this.tokenIndexInLine;
+    let tokens = this.currentLineTokens;
+
+    while (curLine < this.rawLines.length) {
+      if (curTok < tokens.length) {
+        return true;
+      }
+      curLine++;
+      if (curLine < this.rawLines.length) {
+        const line = this.rawLines[curLine];
+        tokens = line.trim().length > 0 ? line.trim().split(/\s+/) : [];
+        curTok = 0;
+      }
+    }
+    return false;
+  }
+
+  public hasAvailableLine(): boolean {
+    return this.lineIndex < this.rawLines.length;
+  }
+
+  public nextToken(): string {
+    while (this.lineIndex < this.rawLines.length) {
+      if (this.tokenIndexInLine < this.currentLineTokens.length) {
+        return this.currentLineTokens[this.tokenIndexInLine++];
+      }
+      this.loadLine(this.lineIndex + 1);
+    }
+    throw new Error('ScannerWaitingForInput');
+  }
+
+  public nextLine(): string {
+    if (this.lineIndex >= this.rawLines.length) {
+      throw new Error('ScannerWaitingForInput');
+    }
+    const line = this.rawLines[this.lineIndex];
+    this.loadLine(this.lineIndex + 1);
+    return line;
+  }
+}
+
 interface CustomClassDef {
   name: string;
   fields: { type: string; name: string }[];
@@ -276,6 +347,49 @@ export class JavaExecutionEngine {
         trimmed === '}'
       ) {
         continue;
+      }
+
+      // Check for unsupported constructs
+      if (/^\s*(?:public\s+)?interface\s+[a-zA-Z_]\w*/.test(trimmed)) {
+        diagnostics.push({
+          category: 'COMPILATION_ERROR',
+          title: 'Unsupported Construct: Java Interface',
+          line: lineNum,
+          column: 1,
+          rawMessage: `error: interface declarations are not supported in the AST simulator\n    ${trimmed}`,
+          friendlyExplanation: 'The browser-based AST simulation engine is designed for standard algorithmic and procedural Java programs. Interfaces are not currently supported in AST mode.',
+          suggestedCorrection: 'Use regular class definitions or run in Real JDK mode with a configured JDK backend.',
+          codeSnippet: trimmed,
+          fixAvailable: false,
+        });
+      }
+
+      if (/^\s*(?:public\s+)?enum\s+[a-zA-Z_]\w*/.test(trimmed)) {
+        diagnostics.push({
+          category: 'COMPILATION_ERROR',
+          title: 'Unsupported Construct: Java Enum',
+          line: lineNum,
+          column: 1,
+          rawMessage: `error: enum declarations are not supported in the AST simulator\n    ${trimmed}`,
+          friendlyExplanation: 'The browser-based AST simulation engine does not currently interpret enum declarations.',
+          suggestedCorrection: 'Use constant variables (e.g. static final int/String) or run in Real JDK mode.',
+          codeSnippet: trimmed,
+          fixAvailable: false,
+        });
+      }
+
+      if (/\b(?:try\s*\{|catch\s*\(|finally\s*\{)/.test(trimmed)) {
+        diagnostics.push({
+          category: 'COMPILATION_ERROR',
+          title: 'Unsupported Construct: Try/Catch Exception Blocks',
+          line: lineNum,
+          column: 1,
+          rawMessage: `error: try/catch/finally blocks are not supported in the AST simulator\n    ${trimmed}`,
+          friendlyExplanation: 'The AST simulator does not currently support try-catch blocks. Runtime errors are caught and visualized directly.',
+          suggestedCorrection: 'Remove the try-catch block and let runtime errors be surfaced in the Error Assistant.',
+          codeSnippet: trimmed,
+          fixAvailable: false,
+        });
       }
 
       // Type mismatch: int x = "string"
@@ -378,7 +492,10 @@ export class JavaExecutionEngine {
     const startTime = performance.now();
     const diagnostics = this.analyzeCode(code);
     const fatalErrors = diagnostics.filter(
-      (d) => d.category === 'SYNTAX_ERROR' || d.category === 'TYPE_MISMATCH'
+      (d) =>
+        d.category === 'SYNTAX_ERROR' ||
+        d.category === 'TYPE_MISMATCH' ||
+        d.category === 'COMPILATION_ERROR'
     );
     if (fatalErrors.length > 0) {
       const err = fatalErrors[0];
@@ -447,9 +564,8 @@ export class JavaExecutionEngine {
     const heap: Record<string, HeapObject> = {};
     const variables: Record<string, VariableInfo> = {};
 
-    // Scanner token buffer for AST simulation if standardInput provided
-    const inputTokens = standardInput ? standardInput.trim().split(/\s+/) : [];
-    let inputTokenIdx = 0;
+    // Scanner input buffer for AST simulation
+    const inputBuffer = new ScannerInputBuffer(standardInput);
 
     // Helper to snapshot current execution state
     const createStep = (
@@ -606,16 +722,61 @@ export class JavaExecutionEngine {
       }
 
       // Scanner method calls
-      if (/\b(?:sc|scanner|input|reader|in)\s*\.\s*next/i.test(expr)) {
-        if (inputTokenIdx < inputTokens.length) {
-          const tok = inputTokens[inputTokenIdx++];
-          if (/nextInt|nextShort|nextByte/i.test(expr)) return parseInt(tok, 10) || 0;
-          if (/nextLong/i.test(expr)) return parseInt(tok, 10) || 0;
-          if (/nextDouble|nextFloat/i.test(expr)) return parseFloat(tok) || 0.0;
-          if (/nextBoolean/i.test(expr)) return tok.toLowerCase() === 'true';
+      if (
+        /\b[a-zA-Z_]\w*\s*\.\s*(?:nextLine|nextInt|nextDouble|nextLong|nextFloat|nextBoolean|nextByte|nextShort|next|hasNext|hasNextInt|hasNextLine)\s*\(\s*\)/i.test(
+          expr
+        )
+      ) {
+        // Pure Scanner call check
+        const pureMatch = expr.match(
+          /^\s*[a-zA-Z_]\w*\s*\.\s*(nextLine|nextInt|nextDouble|nextLong|nextFloat|nextBoolean|nextByte|nextShort|next|hasNext|hasNextInt|hasNextLine)\s*\(\s*\)\s*$/i
+        );
+        if (pureMatch) {
+          const method = pureMatch[1].toLowerCase();
+          if (method === 'nextline') {
+            return inputBuffer.nextLine();
+          }
+          if (method === 'hasnext' || method === 'hasnextint') {
+            return inputBuffer.hasAvailableToken();
+          }
+          if (method === 'hasnextline') {
+            return inputBuffer.hasAvailableLine();
+          }
+          const tok = inputBuffer.nextToken();
+          if (method === 'nextint' || method === 'nextshort' || method === 'nextbyte')
+            return parseInt(tok, 10) || 0;
+          if (method === 'nextlong') return parseInt(tok, 10) || 0;
+          if (method === 'nextdouble' || method === 'nextfloat')
+            return parseFloat(tok) || 0.0;
+          if (method === 'nextboolean') return tok.toLowerCase() === 'true';
           return tok;
         }
-        throw new Error('ScannerWaitingForInput');
+
+        // Replace embedded Scanner method calls in compound expressions
+        expr = expr.replace(
+          /\b[a-zA-Z_]\w*\s*\.\s*(nextLine|nextInt|nextDouble|nextLong|nextFloat|nextBoolean|nextByte|nextShort|next|hasNext|hasNextInt|hasNextLine)\s*\(\s*\)/gi,
+          (_m, methodName) => {
+            const method = methodName.toLowerCase();
+            if (method === 'nextline') {
+              const lineVal = inputBuffer.nextLine();
+              return JSON.stringify(lineVal);
+            }
+            if (method === 'hasnext' || method === 'hasnextint') {
+              return String(inputBuffer.hasAvailableToken());
+            }
+            if (method === 'hasnextline') {
+              return String(inputBuffer.hasAvailableLine());
+            }
+            const tok = inputBuffer.nextToken();
+            if (method === 'nextint' || method === 'nextshort' || method === 'nextbyte')
+              return String(parseInt(tok, 10) || 0);
+            if (method === 'nextlong') return String(parseInt(tok, 10) || 0);
+            if (method === 'nextdouble' || method === 'nextfloat')
+              return String(parseFloat(tok) || 0.0);
+            if (method === 'nextboolean') return String(tok.toLowerCase() === 'true');
+            return JSON.stringify(tok);
+          }
+        );
       }
 
       // String method calls: s.length(), s.toUpperCase(), s.toLowerCase(), s.charAt(i), s.substring(a, b)
@@ -649,7 +810,8 @@ export class JavaExecutionEngine {
       });
 
       expr = expr.replace(/([a-zA-Z_]\w*)\.length/g, (_m, aName) => {
-        const heapObj = heap[aName];
+        const heapKey = localScope[aName]?.heapKey || variables[aName]?.heapKey || aName;
+        const heapObj = heap[heapKey] || heap[aName];
         if (heapObj?.elements) return String(heapObj.elements.length);
         if (heapObj?.matrix2D) return String(heapObj.matrix2D.length);
         const v = localScope[aName]?.value ?? variables[aName]?.value;
@@ -755,8 +917,12 @@ export class JavaExecutionEngine {
       // Evaluate 1D Array accesses inside expression: arr[index]
       resolvedExpr = resolvedExpr.replace(/([a-zA-Z_]\w*)\[([^\[\]]+)\]/g, (_m, arrName, idxExpr) => {
         const idx = Number(evaluateExpr(idxExpr, localScope));
-        const heapObj = heap[arrName];
-        if (heapObj?.elements && !isNaN(idx) && heapObj.elements[idx] !== undefined) {
+        const heapKey = localScope[arrName]?.heapKey || variables[arrName]?.heapKey || arrName;
+        const heapObj = heap[heapKey] || heap[arrName];
+        if (heapObj?.elements && !isNaN(idx)) {
+          if (idx < 0 || idx >= heapObj.elements.length) {
+            throw new Error(`ArrayIndexOutOfBoundsException: Index ${idx} out of bounds for length ${heapObj.elements.length}`);
+          }
           const val = heapObj.elements[idx];
           return typeof val === 'number' || typeof val === 'boolean' ? String(val) : JSON.stringify(val);
         }
@@ -944,6 +1110,7 @@ export class JavaExecutionEngine {
             }
             if (heapKey && heap[heapKey]) {
               const heapObj = heap[heapKey];
+              heap[param.name] = heapObj;
               const varInfo: VariableInfo = {
                 name: param.name,
                 type: param.type,
@@ -1054,13 +1221,20 @@ export class JavaExecutionEngine {
           }
 
           // 2. Scanner input read without provided stdin or when tokens are exhausted
-          if (hasScanner && inputTokenIdx >= inputTokens.length && /\b(?:nextLine|nextInt|nextDouble|nextLong|nextFloat)\b/.test(trimmed)) {
-            createStep(
-              lineNum,
-              `Interactive input waiting: User provides input via the Console Window`,
-              'unsupported_note'
-            );
-            throw new Error('ScannerWaitingForInput');
+          const hasScannerReadCall = /\b[a-zA-Z_]\w*\s*\.\s*(?:nextLine|nextInt|nextDouble|nextLong|nextFloat|nextBoolean|nextByte|nextShort|next)\s*\(\s*\)/i.test(
+            trimmed
+          );
+          if (hasScannerReadCall) {
+            const isNextLineCall = /\b[a-zA-Z_]\w*\s*\.\s*nextLine\s*\(\s*\)/i.test(trimmed);
+            const inputAvailable = isNextLineCall ? inputBuffer.hasAvailableLine() : inputBuffer.hasAvailableToken();
+            if (!inputAvailable) {
+              createStep(
+                lineNum,
+                `Interactive input waiting: User provides input via the Console Window`,
+                'unsupported_note'
+              );
+              throw new Error('ScannerWaitingForInput');
+            }
           }
 
           // 3. For loop (handles outer AND nested loops!)
@@ -1166,12 +1340,12 @@ export class JavaExecutionEngine {
 
           // 4. While loop
           const whileMatch = trimmed.match(/^while\s*\((.*?)\)\s*\{?/);
-          if (whileMatch) {
+          if (whileMatch && !trimmed.endsWith(';')) {
             const condClause = whileMatch[1].trim();
             const { bodyLines, endIdx } = extractBlock(stmtList, idx);
             idx = endIdx + 1;
             let iter = 0;
-            while (iter < 50 && stepCount < MAX_STEPS) {
+            while (iter < 100 && stepCount < MAX_STEPS) {
               iter++;
               const condRes = Boolean(evaluateExpr(condClause, localScope));
               createStep(lineNum, `While condition (#${iter}): ${condClause} -> ${condRes}`, 'loop_header');
@@ -1180,6 +1354,60 @@ export class JavaExecutionEngine {
               if (sig === 'break') break;
               if (sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
             }
+            continue;
+          }
+
+          // 4b. Do-While loop: do { ... } while (...);
+          if (trimmed === 'do' || trimmed.startsWith('do{') || trimmed.startsWith('do ') || /^do\s*\{?$/.test(trimmed)) {
+            const { bodyLines, endIdx } = extractBlock(stmtList, idx);
+            let condClause = 'false';
+            let nextIdx = endIdx + 1;
+
+            const endLineText = stmtList[endIdx]?.text || '';
+            const whileOnEndLineMatch = endLineText.match(/while\s*\((.*?)\)\s*;?/);
+            if (whileOnEndLineMatch) {
+              condClause = whileOnEndLineMatch[1].trim();
+            } else if (endIdx + 1 < stmtList.length) {
+              const nextLineText = stmtList[endIdx + 1].text.trim();
+              const whileNextLineMatch = nextLineText.match(/^while\s*\((.*?)\)\s*;?/);
+              if (whileNextLineMatch) {
+                condClause = whileNextLineMatch[1].trim();
+                nextIdx = endIdx + 2;
+              }
+            }
+
+            idx = nextIdx;
+            let iter = 0;
+            const MAX_DO_WHILE_ITER = 100;
+            createStep(lineNum, `Entered do-while loop`, 'loop_header');
+            while (iter < MAX_DO_WHILE_ITER && stepCount < MAX_STEPS) {
+              iter++;
+              const sig = executeBlock(bodyLines, localScope);
+              if (sig === 'break') break;
+              if (sig === 'return' || (sig && typeof sig === 'object' && sig.signal === 'return')) return sig;
+
+              const condRes = Boolean(evaluateExpr(condClause, localScope));
+              createStep(
+                lineNum,
+                `Do-while condition check (#${iter}): ${condClause} -> ${condRes}`,
+                'loop_header',
+                {
+                  branchDecision: {
+                    condition: condClause,
+                    result: condRes,
+                    explanation: `Evaluated do-while condition: ${condClause} -> ${condRes}`,
+                    branchTaken: condRes ? 'Continue Loop' : 'Exit Loop',
+                  },
+                }
+              );
+              if (!condRes) break;
+            }
+            continue;
+          }
+
+          // 4c. Standalone while trailing do-while: while (...);
+          if (/^while\s*\(.*?\)\s*;?$/.test(trimmed)) {
+            idx++;
             continue;
           }
 
@@ -1401,15 +1629,15 @@ export class JavaExecutionEngine {
             continue;
           }
 
-          // 8. 1D Array Declaration: int[] arr = { 19, 28, 14, 25, 12, 22, 11 };
+          // 8. 1D Array Declaration: int[] arr = { 19, 28, 14, 25, 12, 22, 11 }; or int arr[] = { ... };
           const array1DDeclMatch = trimmed.match(
-            /^(byte|short|int|long|float|double|char|boolean|String)\[\s*\]\s+([a-zA-Z_]\w*)\s*=\s*(?:\{([^}]+)\}|new\s+(?:byte|short|int|long|float|double|char|boolean|String)\[([^\]]+)\]);?/
+            /^(byte|short|int|long|float|double|char|boolean|String)(?:\[\s*\]\s+([a-zA-Z_]\w*)|\s+([a-zA-Z_]\w*)\[\s*\])\s*=\s*(?:\{([^}]+)\}|new\s+(?:byte|short|int|long|float|double|char|boolean|String)\[([^\]]+)\]);?/
           );
           if (array1DDeclMatch) {
             const elemType = array1DDeclMatch[1];
-            const arrName = array1DDeclMatch[2];
-            const literalContent = array1DDeclMatch[3];
-            const newSizeExpr = array1DDeclMatch[4];
+            const arrName = array1DDeclMatch[2] || array1DDeclMatch[3];
+            const literalContent = array1DDeclMatch[4];
+            const newSizeExpr = array1DDeclMatch[5];
             let elements: any[] = [];
             if (literalContent !== undefined) {
               elements = splitTopLevel(literalContent, ',').map((item) =>
@@ -1461,19 +1689,24 @@ export class JavaExecutionEngine {
             const targetIdx = Number(evaluateExpr(idxExpr, localScope));
             const rhsVal = evaluateExpr(rhsExpr, localScope);
 
-            if (heap[arrName]?.elements && !isNaN(targetIdx) && heap[arrName].elements![targetIdx] !== undefined) {
-              const prevVal = heap[arrName].elements![targetIdx];
-              heap[arrName].elements![targetIdx] = rhsVal;
-              heap[arrName].activeIndex = targetIdx;
-              const formattedArrVal = `[${heap[arrName].elements!.map((e) => JSON.stringify(e)).join(', ')}]`;
+            const heapKey = localScope[arrName]?.heapKey || variables[arrName]?.heapKey || arrName;
+            const targetHeapObj = heap[heapKey] || heap[arrName];
+            if (targetHeapObj?.elements && !isNaN(targetIdx)) {
+              if (targetIdx < 0 || targetIdx >= targetHeapObj.elements.length) {
+                throw new Error(`ArrayIndexOutOfBoundsException: Index ${targetIdx} out of bounds for length ${targetHeapObj.elements.length}`);
+              }
+              const prevVal = targetHeapObj.elements[targetIdx];
+              targetHeapObj.elements[targetIdx] = rhsVal;
+              targetHeapObj.activeIndex = targetIdx;
+              const formattedArrVal = `[${targetHeapObj.elements.map((e) => JSON.stringify(e)).join(', ')}]`;
               variables[arrName] = {
-                ...(variables[arrName] || { name: arrName, type: heap[arrName].type, scope: 'main' }),
+                ...(variables[arrName] || { name: arrName, type: targetHeapObj.type, scope: 'main' }),
                 value: formattedArrVal,
                 hasChanged: true,
               };
-              if (arrName !== 'arr' && heap['arr'] === heap[arrName] && variables['arr']) {
-                variables['arr'].value = formattedArrVal;
-                variables['arr'].hasChanged = true;
+              if (variables[heapKey]) {
+                variables[heapKey].value = formattedArrVal;
+                variables[heapKey].hasChanged = true;
               }
 
               // Check if this mutation completes a swap
@@ -1516,7 +1749,12 @@ export class JavaExecutionEngine {
             const varName = swapTempDeclMatch[1];
             const arrName = swapTempDeclMatch[2];
             const sourceIdx = Number(evaluateExpr(swapTempDeclMatch[3], localScope));
-            const sourceVal = heap[arrName]?.elements?.[sourceIdx];
+            const heapKey = localScope[arrName]?.heapKey || variables[arrName]?.heapKey || arrName;
+            const targetHeapObj = heap[heapKey] || heap[arrName];
+            if (!targetHeapObj?.elements || isNaN(sourceIdx) || sourceIdx < 0 || sourceIdx >= targetHeapObj.elements.length) {
+              throw new Error(`ArrayIndexOutOfBoundsException: Index ${sourceIdx} out of bounds for length ${targetHeapObj?.elements?.length ?? 0}`);
+            }
+            const sourceVal = targetHeapObj.elements[sourceIdx];
             lastSwapCandidate = { arrName, idx: sourceIdx, tempVar: varName, val: sourceVal };
             variables[varName] = {
               name: varName,

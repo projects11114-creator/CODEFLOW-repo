@@ -233,8 +233,8 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                 {executedVia === 'host_jvm' ? (
                   <span className="text-emerald-300 font-medium">Real OpenJDK (Process)</span>
                 ) : (
-                  <span className="text-amber-300 font-medium bg-amber-950/40 border border-amber-800/50 px-1.5 py-0.5 rounded text-[10px]" title="AST Simulation Fallback (not running in real JVM)">
-                    AST Simulation (Fallback Only)
+                  <span className="text-amber-300 font-medium bg-amber-950/40 border border-amber-800/50 px-1.5 py-0.5 rounded text-[10px]" title="Browser AST Simulation (Simulated Execution)">
+                    AST Simulation
                   </span>
                 )}
               </span>
@@ -247,7 +247,7 @@ export const OutputAssistantWindow: React.FC<OutputAssistantWindowProps> = ({
                 className="flex items-center gap-1 px-2 py-0.5 rounded bg-amber-950/80 hover:bg-amber-900 border border-amber-700/80 text-amber-200 text-[11px] font-sans transition-colors cursor-pointer"
                 title="Execute program via browser AST simulation without JDK backend"
               >
-                <span>Run in AST Fallback</span>
+                <span>Run in AST Simulation</span>
               </button>
             )}
 

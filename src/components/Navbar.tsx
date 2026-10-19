@@ -389,14 +389,14 @@ export const Navbar: React.FC<NavbarProps> = ({
             </button>
             <button
               onClick={() => onToggleExecutionMode('ast_simulation')}
-              title="Execute using browser-based AST simulation fallback (no JDK needed)"
+              title="Execute using browser-based AST simulation (no JDK needed)"
               className={`px-2 py-0.5 rounded transition-colors cursor-pointer font-medium ${
                 executionMode === 'ast_simulation'
                   ? 'bg-amber-950/80 text-amber-300 border border-amber-700/60'
                   : 'text-[#888888] hover:text-[#CCCCCC]'
               }`}
             >
-              AST Fallback
+              AST Simulation
             </button>
           </div>
         )}

@@ -83,6 +83,7 @@ export default function App() {
   const activeSessionIdRef = useRef<string | null>(null);
   const processedSeqRef = useRef<Set<number>>(new Set());
   const clientAccumulatedInputRef = useRef<string>('');
+  const prevConsoleOutputRef = useRef<string>('');
 
   // Close active session streams and background pollers
   const closeCurrentSessionStreams = useCallback(() => {
@@ -112,6 +113,9 @@ export default function App() {
           javacVersion: status.javacVersion,
           geminiConfigured: status.geminiConfigured,
         });
+        if (!status.online || !status.javacAvailable) {
+          setExecutionModePreference('ast_simulation');
+        }
       })
       .catch(() => {
         setBackendInfo({
@@ -126,6 +130,7 @@ export default function App() {
           javacVersion: 'Backend Offline',
           geminiConfigured: false,
         });
+        setExecutionModePreference('ast_simulation');
       });
   }, []);
 
@@ -186,11 +191,15 @@ export default function App() {
         const astResult = JavaExecutionEngine.executeAndTrace(code, clientAccumulatedInputRef.current);
         if (astResult.trace && astResult.trace.length > 0) {
           setTrace(astResult.trace);
-          setCurrentStepIndex(0);
+          // Highlight current step at the pause point or completion
+          setCurrentStepIndex(Math.max(0, astResult.trace.length - 1));
         }
         if (astResult.stdout) {
-          const prevLen = consoleOutput.length;
-          const newDelta = astResult.stdout.slice(prevLen);
+          const prevOut = prevConsoleOutputRef.current;
+          const newDelta = astResult.stdout.startsWith(prevOut)
+            ? astResult.stdout.slice(prevOut.length)
+            : (consoleOutput && astResult.stdout.startsWith(consoleOutput) ? astResult.stdout.slice(consoleOutput.length) : astResult.stdout);
+          prevConsoleOutputRef.current = astResult.stdout;
           setConsoleOutput(astResult.stdout);
           if (newDelta) {
             setConsoleEntries((prev) => [
@@ -206,6 +215,15 @@ export default function App() {
         }
         if (astResult.stderr) {
           setConsoleStderr(astResult.stderr);
+          setConsoleEntries((prev) => [
+            ...prev,
+            {
+              id: `err-client-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              type: 'stderr',
+              text: astResult.stderr,
+              timestamp: Date.now(),
+            },
+          ]);
         }
         setDiagnostics(astResult.diagnostics || []);
         setCapabilityStatus(astResult.capabilityStatus || 'fully_supported');
@@ -254,24 +272,25 @@ export default function App() {
         }
         if (data.trace && data.trace.length > 0) {
           setTrace(data.trace);
-          setCurrentStepIndex(0);
+          setCurrentStepIndex(data.trace.length - 1);
         }
       }
     } catch (err) {
       console.error('Error submitting input to JVM process:', err);
     }
-  }, []);
+  }, [code, consoleOutput]);
 
-  // Explicit client-side AST simulation fallback
-  const handleRunAstFallback = useCallback(() => {
+  // Browser-based AST simulation execution
+  const handleRunAstFallback = useCallback((customNotice?: string) => {
     closeCurrentSessionStreams();
+    activeSessionIdRef.current = null;
     setExecutionModePreference('ast_simulation');
     setBackendError(null);
     clientAccumulatedInputRef.current = '';
     const startTime = performance.now();
-    const result = JavaExecutionEngine.executeAndTrace(code);
+    const result = JavaExecutionEngine.executeAndTrace(code, '');
+    prevConsoleOutputRef.current = result.stdout || '';
     setTrace(result.trace);
-    setCurrentStepIndex(0);
     setConsoleOutput(result.stdout || '');
     setConsoleStderr(result.stderr || '');
     setDiagnostics(result.diagnostics || []);
@@ -283,11 +302,12 @@ export default function App() {
     setIsProcessRunning(isWaiting);
     setProcessStatus(isWaiting ? 'running' : result.success ? 'completed' : 'error');
     setProcessExitCode(isWaiting ? null : result.success ? 0 : 1);
+    setCurrentStepIndex(isWaiting ? Math.max(0, result.trace.length - 1) : 0);
     setConsoleEntries([
       {
         id: 'ast-fallback-notice-' + Date.now(),
         type: 'status',
-        text: '[AST Simulation Fallback] Executing program in client-side AST engine (No host JDK process active).',
+        text: customNotice || '[AST Simulation] Executing program in browser simulation engine (No JDK required).',
         timestamp: Date.now(),
       },
       ...(result.stdout
@@ -322,8 +342,8 @@ export default function App() {
     setIsPlaying(false);
     if (timerRef.current) clearInterval(timerRef.current);
 
-    // If user prefers AST simulation fallback, run it directly without calling JVM backend
-    if (executionModePreference === 'ast_simulation') {
+    // If user prefers AST simulation or backend is known to be offline/unavailable, run AST simulation directly
+    if (executionModePreference === 'ast_simulation' || !backendInfo.online || !backendInfo.javacAvailable) {
       handleRunAstFallback();
       return;
     }
@@ -365,20 +385,8 @@ export default function App() {
         } catch {}
         const errorMsg =
           errData.error || errData.details || `Backend returned HTTP ${res.status}`;
-        setIsProcessRunning(false);
-        setProcessStatus('error');
-        setProcessExitCode(1);
-        setBackendError(errorMsg);
-        setConsoleStderr(errorMsg);
-        setConsoleEntries([
-          {
-            id: 'backend-err-' + Date.now(),
-            type: 'status',
-            text: `[Real Java Execution Unavailable]\nTarget Backend: ${backendInfo.backendUrl || 'Same-origin (/api)'}\nError: ${errorMsg}\n\nNotice: This is a real JDK failure. CodeFlow will not silently simulate this run as real Java. Click "Run in AST Fallback" or toggle to "AST Fallback" in the top navbar to run in the client-side tracer.`,
-            timestamp: Date.now(),
-          },
-        ]);
-        setMobileTab('output');
+        console.warn(`Real Java backend unavailable (${errorMsg}). Automatically running in browser AST simulator.`);
+        handleRunAstFallback(`[AST Simulation] Backend unavailable (${errorMsg}) — executed in browser simulation engine.`);
         return;
       }
 
@@ -580,22 +588,9 @@ export default function App() {
         }
       }
     } catch (networkErr: any) {
-      // Clear error state - DO NOT SILENTLY SIMULATE!
       const msg = networkErr?.message || 'Network request to backend failed';
-      setIsProcessRunning(false);
-      setProcessStatus('error');
-      setProcessExitCode(1);
-      setBackendError(msg);
-      setConsoleStderr(`Java backend connection error: ${msg}`);
-      setConsoleEntries([
-        {
-          id: 'conn-err-' + Date.now(),
-          type: 'status',
-          text: `[Java Backend Unreachable]\nCould not establish connection to Java execution backend at: ${backendInfo.backendUrl || window.location.origin}\nDetails: ${msg}\n\nNotice: This is a real JDK connection error. The app will not silently simulate this run as real Java.\n• To run in the browser without a JDK server, click "Run in AST Fallback" below or change the mode in the top navbar.\n• To deploy a real JDK backend, see the Dockerfile and configure JAVA_EXECUTION_API_URL.`,
-          timestamp: Date.now(),
-        },
-      ]);
-      setMobileTab('output');
+      console.warn(`Java backend connection error (${msg}). Automatically running in browser AST simulator.`);
+      handleRunAstFallback(`[AST Simulation] Backend unreachable (${msg}) — executed in browser simulation engine.`);
     }
   }, [code, isProcessRunning, executionModePreference, backendInfo, handleRunAstFallback, closeCurrentSessionStreams]);
 
